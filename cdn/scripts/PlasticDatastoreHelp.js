@@ -1389,17 +1389,19 @@ Plastic.RegisterDatastore({
                         '    Chief Software Architect - John Woodworth &lt;john.woodworth@centurylink.com&gt;\n\n' + //->
                         '  Design -\n\n' + //->
                         '    Chief Software Architect - John Woodworth &lt;john.woodworth@centurylink.com&gt;\n' + //->
-                        '    Software Consultant - Dean Ballew &lt;dean.ballew@centurylink.com&gt;\n' + //->
-                        '    Graphical Consultant - Shashwath Bindinganaveli Raghavan\n\n' + //->
+                        '    Software Integration Consultant - Dean Ballew &lt;dean.ballew@centurylink.com&gt;\n' + //->
+                        '    Graphical Interface Consultant - Shashwath Bindinganaveli Raghavan\n\n' + //->
                         '  Development -\n\n' + //->
-                        '    Lead Software Developer - John Woodworth &lt;john.woodworth@centurylink.com&gt;\n' + //->
-                        '    Playbook Consultant - Dean Ballew &lt;dean.ballew@centurylink.com&gt;\n\n' + //->
+                        '    Chief Software Architect - John Woodworth &lt;john.woodworth@centurylink.com&gt;\n' + //->
+                        '    Lead Playbook Consultant - Dean Ballew &lt;dean.ballew@centurylink.com&gt;\n\n' + //->
                         '  Testing -\n\n' + //->
-                        '    Chief Test Architect - Dean Ballew &lt;dean.ballew@centurylink.com&gt;\n' + //->
-                        '    Test Architect - Shashwath Bindinganaveli Raghavan\n\n' + //->
+                        '    Test Architect/ Consultant - Shashwath Bindinganaveli Raghavan\n\n' + //->
+                        '  End User Enablement -\n\n' + //->
+                        '    Chief Systems Integrator - John Woodworth &lt;john.woodworth@centurylink.com&gt;\n' + //->
+                        '    Chief End User Integrator - Dean Ballew &lt;dean.ballew@centurylink.com&gt;\n\n' + //->
                         '  Official [pdmk] Code Maintainers -\n\n' + //->
                         '    Chief Software Architect - John Woodworth &lt;john.woodworth@centurylink.com&gt;\n' + //->
-                        '    Playbook Consultant - Dean Ballew &lt;dean.ballew@centurylink.com&gt;\n' + //->
+                        '    Chief End User Integrator - Dean Ballew &lt;dean.ballew@centurylink.com&gt;\n\n' + //->
                         '</pre>\n' + //->
                         '</div>\n'
                 }

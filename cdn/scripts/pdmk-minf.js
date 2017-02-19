@@ -14509,7 +14509,7 @@ $.widget( "ui.autocomplete", {
 				"aria-haspopup": "true"
 			})
 			.bind( "keydown.autocomplete", function( event ) {
-				if ( self.options.disabled || self.element.propAttr( "readOnly" ) ) {
+				if ( self.options.disabled || (self.element.propAttr( "readOnly" ) && (self.element.is(':not(.plastic-field-select)'))) ) {
 					return;
 				}
 
@@ -21334,6 +21334,7 @@ var DTNodeStatus_Ok      = 0;
 // Start of local namespace
 (function($) {
 
+var _keyToNode = {};
 /*************************************************************************
  *	Common tool functions.
  */
@@ -21426,6 +21427,7 @@ DynaTreeNode.prototype = {
 		this.bExpanded = false;
 		this.bSelected = false;
 
+                _keyToNode[data.key] = this;
 	},
 
 	toString: function() {
@@ -22702,6 +22704,11 @@ DynaTreeNode.prototype = {
 					$("li", $(this.ul)).remove(); // issue 231
 				}
 //				delete tn;  JSLint complained
+
+				if ((tn.data) && (tn.data.key)) {
+					delete (_keyToNode[tn.data.key]);
+				}
+
 			}
 			// Set to 'null' which is interpreted as 'not yet loaded' for lazy
 			// nodes
@@ -23646,19 +23653,21 @@ DynaTree.prototype = {
 	getNodeByKey: function(key) {
 		// Search the DOM by element ID (assuming this is faster than traversing all nodes).
 		// $("#...") has problems, if the key contains '.', so we use getElementById()
-		var el = document.getElementById(this.options.idPrefix + key);
-		if( el ){
-			return el.dtnode ? el.dtnode : null;
+		if (this.options.generateIds) { // Don't bother looking if not available
+			var el = document.getElementById(this.options.idPrefix + key);
+			if( el ){
+				return el.dtnode ? el.dtnode : null;
+			}
 		}
 		// Not found in the DOM, but still may be in an unrendered part of tree
-		var match = null;
-		this.visit(function(node){
-//			window.console.log("%s", node);
-			if(node.data.key === key) {
-				match = node;
-				return false;
-			}
-		}, true);
+		var match = (_keyToNode[key] !== undefined) ? _keyToNode[key] : null;
+//		this.visit(function(node){
+////			window.console.log("%s", node);
+//			if(node.data.key === key) {
+//				match = node;
+//				return false;
+//			}
+//		}, true);
 		return match;
 	},
 
@@ -28053,7 +28062,7 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
 / Support Contact: plastic@centurylink.com
 /
 / Created: 04 January, 2014
-/ Last Updated: 10 February, 2016
+/ Last Updated: 17 December, 2016
 /
 / VERSION: 1.0.0b
 /
@@ -28105,12 +28114,84 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
     $.fn.plasticDataSorter = function(dataKey) { 
         return this.sort(function(a,b){$(a).data(dataKey)-$(b).data(dataKey)});
     };
+    $.each(['show', 'hide'], function(index, name){ // Add triggers for show and hide
+        var origFunction = $.fn[name];
+        $.fn[name] = function(speed) {
+            return origFunction.apply(this, arguments).trigger(name + '.plastic');
+        };
+    });
+    // ** http://stepansuvorov.com/blog/2014/04/jquery-put-and-delete/ ** //
+    // ** http://stackoverflow.com/questions/11793430/retry-a-jquery-ajax-request-which-has-callbacks-attached-to-its-deferred ** //
+    $.each(['post', 'get', 'put', 'delete'], function(index, name){ // Add/ Replace CRUD functions for ajax calls
+        $[name] = function( url, data, callback, type ) {
+            if ($.isFunction( data )) {
+                type = type || callback;
+                callback = data;
+                data = undefined;
+            }
+            var request = {
+                url: url
+               ,type: name.toUpperCase()
+               ,dataType: type
+               ,data: data
+               ,success: function() {
+                    Plastic.Authenticated.call(this);
+                    if ($.isFunction( callback )) {
+                        callback.apply(this, Array.prototype.slice.call(arguments));
+                    }
+                }
+            },
+            jqXHR = undefined,
+            deferredFail = undefined,
+            deferred = $.Deferred();
+            deferredFail = function() {
+                var args = Array.prototype.slice.call(arguments);
+                var util = Plastic.Util('Authentication');
+                if ((jqXHR.status === 401) && (deferredFail.fails++ < 10)) {
+                    var rStatus = util.getStatus.call(jqXHR, request);
+                    var aChallenge = util.getChallenge.call(jqXHR, request);
+                    var thisMessage = ((request) && (request.headers) && (request.headers.Authorization)) //->
+                        ? ((rStatus) && (rStatus.message)) //->
+                            ? ((aChallenge) && (aChallenge.realm)) //->
+                                ? rStatus.message.replace(/\.$/, '') + ': [ ' + aChallenge.realm + ' ]' //->
+                                : rStatus.message //->
+                            : ((aChallenge) && (aChallenge.realm)) //->
+                                ? 'Credentials failed to access resource: [ ' + aChallenge.realm + ' ]' //->
+                                : 'Credentials failed to access resource.' //->
+                        : ((aChallenge) && (aChallenge.realm)) //->
+                            ? 'Login credentials are requested for this application: [ ' + aChallenge.realm + ' ]' //->
+                            : 'Login credentials are requested for this application';
+                    Plastic.Feedback.call(this, '<span class="plastic-system-feedback-title">' + jqXHR.statusText  + //->
+                        ':</span>' + thisMessage, 'warning', undefined, undefined, { decay: 10, force: true })
+                    Plastic.Authenticate.call(jqXHR, request, function(fopts){
+                        jqXHR = $.ajax(request);
+                        jqXHR.then(deferred.resolve, deferredFail);
+                    });
+                } else {
+                    deferred.rejectWith(jqXHR, args);
+                }
+            };
+            deferredFail.fails = 0;
+            jqXHR = $.ajax(request).done(deferred.resolve).fail(deferredFail);
+            return deferred.promise(jqXHR);
+        };
+    });
 })(jQuery);
 
 (function (_,$) { /* window, jQuery */
     // Define Debugging Configuration and Handler
     _._PlasticRuntime = {};
-    _._PlasticPrefs = $.extend({}, { BugPriority: 0, BugCategory: /^none$/i }, _._PlasticPrefs);
+    _._PlasticPrefs = $.extend({}, {
+        BugPriority: 0
+       ,BugCategory: /^none$/i
+       ,AuthUserCookie: 'PDMK_USER'
+       ,AuthUserPattern: /^.{8}.*$/
+       ,AuthPassPattern: /^.{8}.*$/
+       ,FeedbackIgnoreCookie: 'PDMK_FBIGNORE'
+       ,FeedbackIgnore: /^()$/
+       ,FeedbackIconCookie: 'PDMK_FBICON'
+       ,FeedbackIconOnly: /^(information|success)$/
+    }, _._PlasticPrefs);
     _._PlasticBug = function(message, priority, category, level) {
         // Priority: Higher == More Verbose
         // Category: Restrict Messages By Categories (RegExp)
@@ -28162,9 +28243,57 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
     // Create Main "Plastic" Object
     _.Plastic = new function(){
         var readyStack = [];
-        this.version = '1.0.0';
-        this.release = 'Public Beta';
+        this.version = '1.0.0b1';
+        this.release = 'Public Beta [Epoxy]';
         this.ready = function(retFunction) { readyStack.push([this, retFunction]); };
+        this.Cookie = function(name, value, path, expire) { // Basic Cookie Management
+            var retVal = undefined;
+            if (name !== null) { // Name Flag To Ignore Cookies
+                if (value !== undefined) { // Write
+                    var thisCookie = name + '=' + value.replace(/;/g, '%3B');
+                    thisCookie += (path !== undefined) //->
+                        ? '; Path=' + path //->
+                        : (_PlasticPrefs.CookieBase !== undefined) //->
+                            ? '; Path=' + _PlasticPrefs.CookieBase //->
+                            : '';
+                    thisCookie += (expire !== undefined) ? '; Expires=' + new Date(expire).toUTCString() : '';
+                    document.cookie = thisCookie;
+                } else {
+                    var cookies = document.cookie.split(/;\s+/);
+                    for (var cntCookie = 0; cntCookie < cookies.length; cntCookie ++) {
+                        var cPart = cookies[cntCookie].split(/=/);
+                        var thisName = cPart.shift();
+                        if (thisName === name) {
+                            retVal = cPart.join('=').replace(/%3B/ig, ';');
+                        }
+                    }
+                }
+            }
+            return retVal;
+        };
+        this.Authenticated = function(request, fopts) {
+            $('.plastic-commit-pane').removeClass('plastic-not-authenticated').hide();
+        };
+        this.Authenticate = function(request, retFunction, fopts) {
+            var jqXHR = this;
+            var util = Plastic.Util('Authentication');
+            var userTry = Plastic.Cookie(_PlasticPrefs.AuthUserCookie);
+            $('#plastic-auth-user').val((userTry !== undefined) ? userTry : '');
+            $('.plastic-commit-pane').addClass('plastic-not-authenticated').show();
+            $('#plastic-auth-signon').one('click', function(){
+                $('.plastic-commit-pane').removeClass('plastic-not-authenticated');
+                if ((retFunction !== undefined) && (typeof (retFunction) === 'function')) {
+                    var fopts = {};
+                    var thisUser = $('#plastic-auth-user').val(), thisPass = $('#plastic-auth-pass').val();
+                    Plastic.Cookie(_PlasticPrefs.AuthUserCookie, thisUser); // Cache As Session Cookie
+                    ////$('#plastic-auth-pass').val(''); // Clear Previous Password?? (FindMe!!)
+                    var aResponse = util.getResponse.call(jqXHR, request, thisUser, thisPass);
+                    request.headers = { Authorization: aResponse.header };
+                    retFunction.call(jqXHR, fopts);
+                } else {
+                }
+            });
+        };
         this.RegisterPlaybook = function(playbook, fopts) {
             if (_PlasticRuntime.playbook !== undefined) {
                 // Clean up previous playbook (FindMe!!)
@@ -28174,72 +28303,35 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
         this.RegisterDatastore = function(datastore, fopts) {
             if (_PlasticRuntime.datastore === undefined) { _PlasticRuntime.datastore = {}; };
             var pds = _PlasticRuntime.datastore;
+            var legal = {
+                fns: [
+                    'createRowHandler', 'readRowHandler', 'updateRowHandler', 'deleteRowHandler', //->
+                    'commitRowHandler', 'searchRowHandler', 'authenticateHandler', //->
+                    'securityContextHandler', 'syntaxRowHandler'
+                ]
+               ,opts: [
+                    'anchor', 'commit', 'rowDefault', 'includeRoot', 'trimDelimiter', //->
+                    'delimiter', 'rootRowObject', 'augment', 'type', 'attributes', //->
+                    'selected', 'dateFormat', 'prettyNames'
+                ]
+            };
             for (var dsname in datastore) {
+                if (dsname.substr(0, 1) === '_') { continue; }; // Skip Special-Use Datastores
                 if (pds[dsname] === undefined) {
                     pds[dsname] = new PlasticDatastore(dsname, { data: datastore[dsname].data });
-                    // Roll These IFs into Switch?? (FindMe!!)
-                    if (typeof (datastore[dsname].createRowHandler) === "function") {
-                        pds[dsname].createRowHandler = datastore[dsname].createRowHandler;
+                    for (var cntFn = 0; cntFn < legal.fns.length; cntFn ++) {
+                        if (typeof (datastore[dsname][legal.fns[cntFn]]) === "function") {
+                            pds[dsname][legal.fns[cntFn]] = datastore[dsname][legal.fns[cntFn]];
+                        } else if (typeof (datastore['_default'][legal.fns[cntFn]]) === "function") {
+                            pds[dsname][legal.fns[cntFn]] = datastore['_default'][legal.fns[cntFn]];
+                        }
                     }
-                    if (typeof (datastore[dsname].readRowHandler) === "function") {
-                        pds[dsname].readRowHandler = datastore[dsname].readRowHandler;
-                    }
-                    if (typeof (datastore[dsname].updateRowHandler) === "function") {
-                        pds[dsname].updateRowHandler = datastore[dsname].updateRowHandler;
-                    }
-                    if (typeof (datastore[dsname].deleteRowHandler) === "function") {
-                        pds[dsname].deleteRowHandler = datastore[dsname].deleteRowHandler;
-                    }
-                    if (typeof (datastore[dsname].commitRowHandler) === "function") {
-                        pds[dsname].commitRowHandler = datastore[dsname].commitRowHandler;
-                    }
-                    if (typeof (datastore[dsname].searchRowHandler) === "function") {
-                        pds[dsname].searchRowHandler = datastore[dsname].searchRowHandler;
-                    }
-                    if (typeof (datastore[dsname].requestSecurityContextHandler) === "function") {
-                        pds[dsname].requestSecurityContextHandler = datastore[dsname].requestSecurityContextHandler;
-                    }
-                    if (typeof (datastore[dsname].syntaxRowHandler) === "function") {
-                        pds[dsname].syntaxRowHandler = datastore[dsname].syntaxRowHandler;
-                    }
-                    if (datastore[dsname].anchor) {
-                        pds[dsname].option('anchor', datastore[dsname].anchor);
-                    }
-                    if (datastore[dsname].commit) {
-                        pds[dsname].option('commit', datastore[dsname].commit);
-                    }
-                    if (datastore[dsname].rowDefault) {
-                        pds[dsname].option('rowDefault', datastore[dsname].rowDefault);
-                    }
-                    if (datastore[dsname].includeRoot) {
-                        pds[dsname].option('includeRoot', datastore[dsname].includeRoot);
-                    }
-                    if (datastore[dsname].trimDelimiter) {
-                        pds[dsname].option('trimDelimiter', datastore[dsname].trimDelimiter);
-                    }
-                    if (datastore[dsname].delimiter) {
-                        pds[dsname].option('delimiter', datastore[dsname].delimiter);
-                    }
-                    if (datastore[dsname].rootRowObject) {
-                        pds[dsname].option('rootRowObject', datastore[dsname].rootRowObject);
-                    }
-                    if (datastore[dsname].augment) {
-                        pds[dsname].option('augment', datastore[dsname].augment);
-                    }
-                    if (datastore[dsname].type) {
-                        pds[dsname].option('type', datastore[dsname].type);
-                    }
-                    if (datastore[dsname].attributes) {
-                        pds[dsname].option('attributes', datastore[dsname].attributes);
-                    }
-                    if (datastore[dsname].selected) {
-                        pds[dsname].option('selected', datastore[dsname].selected);
-                    }
-                    if (datastore[dsname].dateFormat) {
-                        pds[dsname].option('dateFormat', datastore[dsname].dateFormat);
-                    }
-                    if (datastore[dsname].prettyNames) {
-                        pds[dsname].option('prettyNames', datastore[dsname].prettyNames);
+                    for (var cntOpt = 0; cntOpt < legal.opts.length; cntOpt ++) {
+                        if (legal.opts[cntOpt] in datastore[dsname]) {
+                            pds[dsname].option(legal.opts[cntOpt], datastore[dsname][legal.opts[cntOpt]]);
+                        } else if (legal.opts[cntOpt] in datastore['_default']) {
+                            pds[dsname].option(legal.opts[cntOpt], datastore['_default'][legal.opts[cntOpt]]);
+                        }
                     }
                 } else {
                     ///throw new Error("PlasticDatastore already exists with name '" + dsname + "'");
@@ -28251,7 +28343,14 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
             if (_PlasticRuntime.root === undefined) { // Define "root" anchor element
                 _PlasticRuntime.root = parent;
                 // Initialize Root And Loading Classes
+    // Enable qUnit Features if Libraries are Available
+    if ($('#qunit').length === 0) {
+        $('body').append($('<div id="qunit" /><div id="qunit-fixture" />'));
+    }
                 $(_PlasticRuntime.root).addClass('plastic-root plastic-loading');
+                if ((document.all) || (/rv:11\./.test(navigator.userAgent))) { // wIErdness Fix :)
+                    $(_PlasticRuntime.root).addClass('plastic-browser-msie');
+                }
                 _PlasticRuntime.imgbase = $('.plastic-root').css('background-image').replace(/^[^(]*\("|[^/]*$/g, '');
             };
             var parts = [];
@@ -28296,6 +28395,172 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
                     }
                 }
             }
+        };
+        this.Util = function(category) {
+            var retVal = undefined;
+            switch (category) {
+                case 'Authentication':
+                    retVal = {
+                        _field_values: function(scheme, items, qStrings) {
+                            var thisRet = {};
+                            thisRet[scheme] = {};
+                            for (var cntItems = 0; cntItems < items.length; cntItems ++) {
+                                if (/^[A-Za-z0-9!#$%&'*+.^_`|~-]+=\1$/.test(items[cntItems])) {
+                                    // Is Quoted String Pair
+                                    thisRet[scheme][items[cntItems].replace(/=.*$/, '')] = //->
+                                        qStrings.shift().replace(/\1/g, '"');
+                                } else if (/^[A-Za-z0-9!#$%&'*+.^_`|~-]+=[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(items[cntItems])) {
+                                    // Is Token Pair
+                                    thisRet[scheme][items[cntItems].replace(/=.*$/, '')] = //->
+                                        items[cntItems].replace(/^.*=/, '');
+                                } else if ((items.length === 1) && (/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(items[cntItems]))) {
+                                    // Is Single Token Value, Special Key Of '>' Used
+                                    thisRet[scheme]['>'] = items[cntItems];
+                                } else {
+                                    // Bad Item Value (FindMe!!)
+                                }
+                            }
+                            if ('data' in thisRet[scheme]) {
+                                try {
+                                    var decoded = atob(thisRet[scheme].data); // Assume "atob" Exists Native or Is PollyFilled
+                                    decoded = JSON.parse(decoded); // Assume Clean Base64 Decode
+                                    delete (thisRet[scheme].data);
+                                    for (var thisElem in decoded) {
+                                        thisRet[scheme][thisElem] = decoded[thisElem];
+                                    }
+                                } catch (err) {
+                                }
+                            }
+                            return thisRet;
+                        }
+                       ,_field_parser: function(action, qStrings) {
+                            var scheme = undefined, items = [], thisRet = undefined;
+                            while (action.length) {
+                                var thisPart = action.shift();
+                                if (scheme === undefined) {
+                                    scheme = thisPart;
+                                } else {
+                                    if ((items.length === 0) || (action.length === 0) || //->
+                                        (/(,$|=)/.test(thisPart))) {
+                                        items[items.length] = thisPart.replace(/,$/, '');
+                                    } else { // NOTE: Must Process All Fields To Keep qStrings In Sync
+                                        var values = retVal._field_values(scheme, items, qStrings);
+                                        if (scheme === '|pdmk|') { // Make Configurable?? (FindMe!!)
+                                            thisRet = values;
+                                            break;
+                                        }
+                                        scheme = thisPart;
+                                        items = [];
+                                    }
+                                }
+                            }
+                            if ((scheme === '|pdmk|') && (items.length)) { // Make Configurable?? (FindMe!!)
+                                thisRet = retVal._field_values(scheme, items, qStrings);
+                            }
+                            return thisRet;
+                        }
+                       ,_hash: function(algorithm, bits, data) { // Wrapper for Current Hash Library (jsSHA)
+                            var fopts = $.extend({}, { "shakeLen" : bits });
+                            var hash = new jsSHA(algorithm, "TEXT");
+                            hash.update(data);
+                            return hash.getHash("HEX", fopts);
+                        }
+                       ,getChallenge: function(request){
+                            var jqXHR = this;
+                            var thisRet = undefined;
+                            var qStrings = [];
+                            var challenge = jqXHR.getResponseHeader('WWW-Authenticate');
+                            // ASCII SOH Character Borrowed For Simplicity
+                            // NOTE: Escaped-Quotes SHOULD Only Appear Within Real Quotes
+                            challenge = challenge.replace(/\1/g, '').replace(/\\\"/g, '\1') //->
+                                .replace(/"[^"]*"/g, function(match){
+                                qStrings[qStrings.length] = match.replace(/^"|"$/g, '');
+                                return '\1';
+                            }).split(/[\s]+/); // Finally, Create Array Of Tokens
+                            challenge = retVal._field_parser(challenge, qStrings);
+                            thisRet = ((challenge) && (challenge['|pdmk|'])) ? challenge['|pdmk|'] : {};
+                            return thisRet;
+                        }
+                       ,getResponse: function(request, user, pass){
+                            var jqXHR = this;
+                            var thisRet = undefined;
+                            var aChallenge = retVal.getChallenge.call(jqXHR, request);
+                            var aResponse = {};
+                            aResponse.user = user;
+                            aResponse.nonce = aChallenge.nonce;
+                            aResponse.opaque = aChallenge.opaque;
+                            aResponse.type = aChallenge.type;
+                            var algorithms = (typeof (aChallenge.algorithms) === 'string') //->
+                                ? aChallenge.algorithms.split('|') : [];
+                            aResponse.aweight = -1; // Target Most Preferred Algorithm
+                            while (algorithms.length) {
+                                var thisAlg = algorithms.shift().toUpperCase();
+                                var weight = 0;
+                                switch (thisAlg) {
+                                    case "SHAKE256": // Preferred Algorithms Above Lesser Preferred
+                                        weight += 1;
+                                    case "SHAKE128":
+                                        weight += 1;
+                                        aResponse.bitLength = 1024;
+                                    case "SHA3-512":
+                                        weight += 1;
+                                    case "SHA-512":
+                                        weight += 1;
+                                    case "SHA3-384":
+                                        weight += 1;
+                                    case "SHA-384":
+                                        weight += 1;
+                                    case "SHA3-256":
+                                        weight += 1;
+                                    case "SHA-256":
+                                        weight += 1;
+                                    case "SHA3-224":
+                                        weight += 1;
+                                    case "SHA-224":
+                                        weight += 1;
+                                    case "SHA-1":
+                                        weight += 1;
+                                        if ((weight > 0) && (weight > aResponse.aweight)) {
+                                            aResponse.algorithm = thisAlg;
+                                            aResponse.aweight = weight;
+                                        }
+                                        break;
+                                    default:
+                                        aResponse.error = 'Unable to negotiate a secure algorithm for authenticating against server';
+                                };
+                            }
+                            if ('algorithm' in aResponse) {
+                                delete (aResponse.aweight); // No Longer Needed
+                                aResponse.tokenRaw = [aResponse.algorithm, aResponse.bitLength, aResponse.user, aResponse.nonce, aResponse.algorithm, aResponse.bitLength, pass];
+                                aResponse.token = retVal._hash(aResponse.algorithm, aResponse.bitLength, //->
+                                    aResponse.user + ':' + aResponse.nonce + ':' + //->
+                                    retVal._hash(aResponse.algorithm, aResponse.bitLength, pass));
+                                try {
+                                    var encoded = JSON.stringify(aResponse);
+                                    encoded = btoa(encoded); // Assume "btoa" Exists Native or Is PollyFilled
+                                    thisRet = { 'data' : aResponse, 'header' : '|pdmk| data="'+ encoded +'"' };
+                                } catch (err) {
+                                }
+                            } else {
+                            }
+                            return thisRet;
+                        }
+                       ,getStatus: function(request){
+                            var jqXHR = this;
+                            var thisRet = undefined;
+                            try {
+                                var thisStatus = JSON.parse(jqXHR.responseText);
+                                thisRet = thisStatus.status;
+                            } catch (err) { // Do something?? (FindMe!!)
+                            }
+                            return thisRet;
+                        }
+                    };
+                    break;
+                default:
+                    retVal = {};
+            };
+            return retVal;
         };
         this.SizeFrame = function(e) {
             var thisHeight = parseInt($(this).height());
@@ -28374,15 +28639,15 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
                     if ((datastore) && (path) && (path === '-')) { // Previous Datastore rowObject
                         var findPrevHop = function(thisRowObject) { // Roll this into Datastore Method (FindMe!!)
                             var prevHop = null;
-                            thisRowObject = datastore.readCache(thisRowObject.prev);
+                            thisRowObject = datastore.readCache(thisRowObject.prev, fopts);
                             if ((thisRowObject !== null) && (thisRowObject.firstChild)) {
                                 while (thisRowObject.firstChild) {
-                                    thisRowObject = datastore.readCache(thisRowObject.firstChild);
+                                    thisRowObject = datastore.readCache(thisRowObject.firstChild, fopts);
                                     var siblings = ((thisRowObject.siblings) && (typeof (thisRowObject.siblings) === 'function')) //->
                                         ? thisRowObject.siblings(true) : null;
                                     if (siblings !== null) {
                                         prevHop = (siblings.length === 0) ? thisRowObject.key : siblings[siblings.length -1];
-                                        thisRowObject = datastore.readCache(prevHop, { namespace: namespace });
+                                        thisRowObject = datastore.readCache(prevHop, $.extend({}, fopts, { namespace: namespace }));
                                     } else {
                                         prevHop = null;
                                     }
@@ -28416,7 +28681,7 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
                                     break;
                                 } else {
                                     nextHop = thisRowObject.next;
-                                    thisRowObject = datastore.readCache(thisRowObject.parentKey, { namespace: namespace });
+                                    thisRowObject = datastore.readCache(thisRowObject.parentKey, $.extend({}, fopts, { namespace: namespace }));
                                 }
                             }
                             return nextHop;
@@ -28765,15 +29030,15 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
                     if ((datastore) && (path) && (path === '-')) { // Previous Datastore rowObject
                         var findPrevHop = function(thisRowObject) { // Roll this into Datastore Method (FindMe!!)
                             var prevHop = null;
-                            thisRowObject = datastore.readCache(thisRowObject.prev);
+                            thisRowObject = datastore.readCache(thisRowObject.prev, fopts);
                             if ((thisRowObject !== null) && (thisRowObject.firstChild)) {
                                 while (thisRowObject.firstChild) {
-                                    thisRowObject = datastore.readCache(thisRowObject.firstChild);
+                                    thisRowObject = datastore.readCache(thisRowObject.firstChild, fopts);
                                     var siblings = ((thisRowObject.siblings) && (typeof (thisRowObject.siblings) === 'function')) //->
                                         ? thisRowObject.siblings(true) : null;
                                     if (siblings !== null) {
                                         prevHop = (siblings.length === 0) ? thisRowObject.key : siblings[siblings.length -1];
-                                        thisRowObject = datastore.readCache(prevHop);
+                                        thisRowObject = datastore.readCache(prevHop, fopts);
                                     } else {
                                         prevHop = null;
                                     }
@@ -28900,7 +29165,8 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
                     renderer.update.call(renderer, [ { "datastore": datastore, "path": path }, rowObjects[1] ]);
                 };
                 if ((fopts) && (fopts.item)) { update[dsid] = fopts.item.value; };
-                thisds.updateRow(key, [ { "status" : "update", "id" : thisds.nextSequence() }, update ], //->
+                var thisStatus = (e.type === 'autocompleteselect') ? 'selectionupdate' : 'update';
+                thisds.updateRow(key, [ { "status" : thisStatus, "id" : thisds.nextSequence() }, update ], //->
                     retFunction, { namespace: namespace });
             }
         };
@@ -28912,7 +29178,14 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
             if ((plasticopts) && (plasticopts.fulfill) && (plasticopts.fulfill[thisId])) {
                 var thisFulfill = plasticopts.fulfill[thisId];
                 if (thisFulfill instanceof Array) {
-                    retFunction((thisFulfill.length) ? thisFulfill : thisEmpty);
+                    var thisReturnSet = [];
+                    for (var cntFF = 0; cntFF < thisFulfill.length; cntFF ++) {
+                        thisReturnSet[thisReturnSet.length] = {
+                            'class' : (thisFulfill[cntFF] === this.term) ? 'plastic-autofill-selected' : 'plastic-autofill-item'
+                           ,'value' : thisFulfill[cntFF]
+                        };
+                    }
+                    retFunction((thisReturnSet.length) ? thisReturnSet : thisEmpty);
                 } else if ((typeof (thisFulfill) === 'string') && //->
                     ($('#' + thisFulfill).length) && //->
                     ($('#' + thisFulfill)[0].fulfillList) && //->
@@ -28923,7 +29196,7 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
                     var thisList = $('#' + thisFulfill)[0].fulfillList(this.term);
                     retFunction((thisList.length) ? thisList : thisEmpty);
                 }
-            } else {
+            } else { // For Testing Only, Clean This Up (FindMe!!)
                 var tt = [];
                 for (var cnt = 0; cnt < 200; cnt ++) {
                 ///for (var cnt = 0; cnt < 10000; cnt ++) {
@@ -28996,9 +29269,22 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
         var feedbackDecayTMO = {};
         this.FeedbackActivate = function(active, autoclose) {
             var command = ((autoclose) || (autoclose === undefined)) ? 'active' : 'active.noclose';
+            $('.plastic-system-feedback-iconwrap', _PlasticRuntime.system.feedback).each(function(){
+                var type = $(this).attr('id').replace(/^plastic-feedback-/, '');
+                if (!(/all$/.test(type))) { // Skip silenceall and iconall items
+                    if (_PlasticPrefs.FeedbackIgnore.test(type)) { // Silence Messages??
+                        $('.plastic-system-feedback-icon-tattoo', this).addClass('ui-icon ui-icon-volume-off');
+                    } else if (_PlasticPrefs.FeedbackIconOnly.test(type)) { // Iconize Messages
+                        $('.plastic-system-feedback-icon-tattoo', this).addClass('ui-icon ui-icon-minusthick');
+                    } else { // Clear Previous Entries
+                        $('.plastic-system-feedback-icon-tattoo', this) //->
+                            .removeClass('ui-icon ui-icon-volume-off ui-icon-minusthick');
+                    }
+                }
+            });
             if ((active) || (active === undefined)) {
                 $('.plastic-system-feedback-frame').css({ 'display' : 'block' }).scrollTop(0);
-                $('.plastic-system-feedback').animate({height: 400}, 400, 'swing', function(){
+                $('.plastic-system-feedback').animate({height: '80%'}, 400, 'swing', function(){
                     $('.plastic-system-feedback-control').css({ 'display' : 'block' });
                     $('.plastic-system-feedback').trigger(command);
                 });
@@ -29014,6 +29300,13 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
                 });
             }
         };
+        // Update Cookie Based Feedback Prefs
+        _._PlasticPrefs = $.extend({}, _._PlasticPrefs, {
+            FeedbackIgnore : (this.Cookie(_._PlasticPrefs.FeedbackIgnoreCookie)) //->
+                ? new RegExp(this.Cookie(_._PlasticPrefs.FeedbackIgnoreCookie)) : undefined
+           ,FeedbackIconOnly : (this.Cookie(_._PlasticPrefs.FeedbackIconCookie)) //->
+                ? new RegExp(this.Cookie(_._PlasticPrefs.FeedbackIconCookie)) : undefined
+        });
         this.Feedback = function(message, type, key, name, fopts) {
             // Rework "name" logic to switch focus to error element (FindMe!!)
             var weight = { error: 5, warning: 4, question: 3, success: 2, information: 1, clear: 0 };
@@ -29026,14 +29319,11 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
             if (typeof (message) === 'string') { message = { name: message }; };
             var timestamp = (new Date()).toString();
             for (var thisIndex in message) {
-                if ($('input[name=silenceall]').prop('checked')) {
-                    if (!((fopts) && (fopts.breach))) {
-                        continue;
-                    }
-                } else if (($('input[name=silence' + type + ']').length) && //->
-                    ($('input[name=silence' + type + ']').prop('checked'))) {
-                    if (!((fopts) && (fopts.breach))) {
-                        continue;
+                if (_PlasticPrefs.FeedbackIgnore instanceof RegExp) {
+                    if (_PlasticPrefs.FeedbackIgnore.test(type)) {
+                        if (!((fopts) && ((fopts.breach) || (fopts.force)))) {
+                            continue;
+                        }
                     }
                 }
                 var thisId = ((fopts) && (fopts.identifier)) //->
@@ -29068,25 +29358,22 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
                     $('#' + thisId).append($(thisButtonBar));
                     $('#' + thisId).find('.plastic-system-feedback-buttonbar button').button();
                 }
-                if ((weight[type] >= 2) && (!($('input[name=icononly]').prop('checked')))) {
+                if ((_PlasticPrefs.FeedbackIconOnly instanceof RegExp) && //->
+                    (_PlasticPrefs.FeedbackIconOnly.test(type))) {
+                    if ((fopts) && (fopts.force)) { // Force Popup
+                        Plastic.FeedbackActivate(true);
+                    } else { // Iconized Notification
+                        var throb = { big: { height: 48, width: 48 }, small: { height: 24, width: 24 } };
+                        if (!($('.plastic-system-feedback-icontab').hasClass('plastic-system-feedback-icontab-throbbing'))) {
+                            $('.plastic-system-feedback-icontab').addClass('plastic-system-feedback-icontab-throbbing');
+                            $('.plastic-system-feedback-icontab').animate(throb.big, 600, function(){
+                                $('.plastic-system-feedback-icontab').animate(throb.small);
+                                $('.plastic-system-feedback-icontab').removeClass('plastic-system-feedback-icontab-throbbing');
+                            });
+                        }
+                    }
+                } else { // Activate Visual "Popup" Notification
                     Plastic.FeedbackActivate(true);
-                } else {
-                    var throb = { big: { height: 48, width: 48 }, small: { height: 24, width: 24 } };
-                    if (($('.plastic-system-feedback-icontab').hasClass('plastic-system-feedback-bottomleft')) || //->
-                        ($('.plastic-system-feedback-icontab').hasClass('plastic-system-feedback-bottomright'))) {
-                        throb.big.top   = -52;
-                        throb.small.top = -28;
-                    } else {
-                        throb.big.bottom   = -52;
-                        throb.small.bottom = -28;
-                    }
-                    if (!($('.plastic-system-feedback-icontab').hasClass('plastic-system-feedback-icontab-throbbing'))) {
-                        $('.plastic-system-feedback-icontab').addClass('plastic-system-feedback-icontab-throbbing');
-                        $('.plastic-system-feedback-icontab').animate(throb.big, 600, function(){
-                            $('.plastic-system-feedback-icontab').animate(throb.small);
-                            $('.plastic-system-feedback-icontab').removeClass('plastic-system-feedback-icontab-throbbing');
-                        });
-                    }
                 }
                 if (decay) {
                     feedbackDecayTMO[thisId] = setTimeout(function(){
@@ -29326,23 +29613,41 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
                         // Add default SysFeedback Component if not defined in Playbook
                         if (_PlasticRuntime.system.feedback === undefined) {
                             _PlasticRuntime.system.feedback = $('<div class="plastic-system-feedback" ' + //->
-                                'id="PlasticDefaultSysFeedback"><div class="plastic-system-feedback-control">Silence...&nbsp;' + //->
-                                '<span title="Check to silence all messages">' + //->
-                                '<label for="silenceall">All</label><input type="checkbox" name="silenceall"></span>' + //->
-                                '<span title="Check to silence error messages">' + //->
-                                '<label for="silenceerror">Errors</label><input type="checkbox" name="silenceerror"></span>' + //->
-                                '<span title="Check to silence warning messages">' + //->
-                                '<label for="silencewarning">Warnings</label><input type="checkbox" name="silencewarning"></span>' + //->
-                                '<span title="Check to silence question messages">' + //->
-                                '<label for="silencequestion">Questions</label><input type="checkbox" name="silencequestion"></span>' + //->
-                                '<span title="Check to silence information messages">' + //->
-                                '<label for="silenceinformation">Information</label><input type="checkbox" name="silenceinformation"></span>' + //->
-                                '<span title="Check to silence success messages">' + //->
-                                '<label for="silencesuccess">Success</label><input type="checkbox" name="silencesuccess"></span>' + //->
-                                '<span title="Check to display messages as icon indicator only">' + //->
-                                '<label for="icononly">Icon only?</label><input type="checkbox" name="icononly" checked></span>' + //->
-                                '<span title="Check to confirm and remove all messages">' + //->
-                                '<label for="confirmall">Confirm All</label><input type="checkbox" name="confirmall"></span>' + //->
+                                'id="PlasticDefaultSysFeedback">' + //->
+                                  '<div class="plastic-system-feedback-control">' + //->
+                                    '<span class="plastic-system-feedback-control-title">- System Messages -</span>' + //->
+                                    '<div class="plastic-system-feedback-iconbar">' + //->
+                                      '<div class="plastic-system-feedback-iconwrap" id="plastic-feedback-silenceall" ' + //->
+                                        'title="Click to toggle silence for all messages">' + //->
+                                        '<img class="plastic-system-feedback-icon" src="images/plastic-all.png">' + //->
+                                        '<div class="plastic-system-feedback-icon-tattoo" /></div>' + //->
+                                      '<div class="plastic-system-feedback-iconwrap" id="plastic-feedback-error" ' + //->
+                                        'title="Click to iconize error messages">' + //->
+                                        '<img class="plastic-system-feedback-icon" src="images/plastic-error.png">' + //->
+                                        '<div class="plastic-system-feedback-icon-tattoo" /></div>' + //->
+                                      '<div class="plastic-system-feedback-iconwrap" id="plastic-feedback-warning" ' + //->
+                                        'title="Click to iconize warning messages">' + //->
+                                        '<img class="plastic-system-feedback-icon" src="images/plastic-warning.png">' + //->
+                                        '<div class="plastic-system-feedback-icon-tattoo" /></div>' + //->
+                                      '<div class="plastic-system-feedback-iconwrap" id="plastic-feedback-question" ' + //->
+                                        'title="Click to iconize question messages">' + //->
+                                        '<img class="plastic-system-feedback-icon" src="images/plastic-question.png">' + //->
+                                        '<div class="plastic-system-feedback-icon-tattoo" /></div>' + //->
+                                      '<div class="plastic-system-feedback-iconwrap" id="plastic-feedback-information" ' + //->
+                                        'title="Click to iconize information messages">' + //->
+                                        '<img class="plastic-system-feedback-icon" src="images/plastic-information.png">' + //->
+                                        '<div class="plastic-system-feedback-icon-tattoo" /></div>' + //->
+                                      '<div class="plastic-system-feedback-iconwrap" id="plastic-feedback-success" ' + //->
+                                        'title="Click to iconize success messages">' + //->
+                                        '<img class="plastic-system-feedback-icon" src="images/plastic-success.png">' + //->
+                                        '<div class="plastic-system-feedback-icon-tattoo" /></div>' + //->
+                                      '<div class="plastic-system-feedback-iconwrap" id="plastic-feedback-iconall" ' + //->
+                                        'title="Click to toggle iconize for all messages">' + //->
+                                        '<img class="plastic-system-feedback-icon" src="images/plastic-icon.png">' + //->
+                                        '<div class="plastic-system-feedback-icon-tattoo" /></div>' + //->
+                                  '</div>' + //->
+                                '<span class="plastic-system-feedback-control-button" ' + //->
+                                  'title="Check to confirm and remove all messages">Confirm All Messages</span>' + //->
                                 '</div><div class="plastic-system-feedback-icontab" ' + //->
                                 'title="Click to view waiting messages" />' + //->
                                 '<div class="plastic-system-feedback-frame" /></div>');
@@ -29351,28 +29656,101 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
                                 .addClass('plastic-system-feedback-bottomright');
                         }
                         if (_PlasticRuntime.system.commitpane === undefined) {
-                            var commitTM0 = 0, commitClasses = [ 'apng-level0' //->
-                               ,'apng-level1', 'apng-level2', 'apng-level3', 'apng-level4', 'apng-level5'
-                               ,'apng-level6', 'apng-level7', 'apng-level8', 'apng-level9', 'apng-level10'
-                               ,'apng-level11', 'apng-level12', 'apng-level13', 'apng-level14', 'apng-level15'
-                            ];
-                            $.each(['show', 'hide'], function(index, name){ // Add triggers for show and hide
-                                var origFunction = $.fn[name];
-                                $.fn[name] = function(speed) {
-                                    return origFunction.apply(this, arguments).trigger(name + '.plastic');
-                                };
-                            });
-                            _PlasticRuntime.system.commitpane = $('<div class="plastic-commit-pane"><em>Please Wait...</em></div>');
+                            var paneContent = //->
+                                '<div class="plastic-commit-pane plastic-not-authenticated">' + //->
+                                '  <div class="plastic-commit-bgimage" />' + //->
+                                '  <em>Please Wait...</em>' + //->
+                                '  <div class="plastic-login-frame">' + //->
+                                '    <div class="plastic-login-icon"><img src="images/plastic-lock.png"></div>' + //->
+                                '    <div class="plastic-login-title">System Login</div>' + //->
+                                '    <div class="plastic-login-capslock">' + //->
+                                '      <img src="images/plastic-warning.png" width="24" height="24">WARNING: Caps Lock on' + //->
+                                '    </div>' + //->
+                                '    <table width="490"><tbody>' + //->
+                                '      <tr><td><label for="plastic-auth-user">Login Name:</label></td>' + //->
+                                '      <td><input type="text" name="plastic-auth-user" id="plastic-auth-user"></td></tr>' + //->
+                                '      <tr><td><label for="plastic-auth-pass">Password:</label></td>' + //->
+                                '      <td><input type="password" name="plastic-auth-pass" id="plastic-auth-pass"></td></tr>' + //->
+                                '      <tr><td colspan="2"><button id="plastic-auth-abort">Cancel</button>' + //->
+                                '        <button id="plastic-auth-signon" disabled>Sign On</button></td></tr>' + //->
+                                '    </tbody></table>' + //->
+                                '  </div>' + //->
+                                '  <div class="plastic-error-frame" />' + //->
+                                '</div>';
+                            _PlasticRuntime.system.commitpane = $(paneContent);
                             $(_PlasticRuntime.root).append(_PlasticRuntime.system.commitpane);
-                            var commitActive = function(){
-                                if (commitTM0) { clearTimeout(commitTM0); commitTM0 = 0; };
-                                commitClasses.push(commitClasses.shift()); // Revolve Classes
-                                _PlasticRuntime.system.commitpane //->
-                                    .removeClass(commitClasses.slice(0, commitClasses.length -1).join(' ')) //->
-                                    .addClass(commitClasses[commitClasses.length -1]);
-                                if (_PlasticRuntime.system.commitpane.is(':visible')) { setTimeout(commitActive, 100); };
-                            };
-                            _PlasticRuntime.system.commitpane.on('show.plastic', commitActive);
+                            $('#plastic-auth-abort').button() // Decorate Cancel Button
+                                .on('click', function(){
+                                    $('.plastic-commit-pane').removeClass('plastic-not-authenticated') //->
+                                        .addClass('plastic-login-error');
+                                    if (_PlasticPrefs.HttpError401) {
+                                        $('.plastic-error-frame').load(_PlasticPrefs.HttpError401);
+                                    }
+                                    $('.plastic-error-frame').animate({ height: '90%', width: '90%'}, 1200);
+                                });
+                            $('#plastic-auth-signon').button(); // Decorate Sign-On Button
+                            var errorContents = '<center>' + //->
+                                '<h1>Authentication Canceled</h1>' + //->
+                                '<p>This application requires the user to be authenticated for access ' + //->
+                                'but the authentication request was canceled.<br><br>' + //->
+                                '<a href="javascript:window.history.go(0)">Click Here</a> to attempt authentication again<br><br>' + //->
+                                'Or<br><br>' + //->
+                                '<a href="javascript:window.close()">Close this page</a> to cancel the application login.</p>' + //->
+                                '</center>';
+                            $('.plastic-error-frame:first').html(errorContents);
+                            _PlasticRuntime.system.commitpane.bind('keydown.plastic-commitpane', function(event){
+                                // Prevent tabbing out of commit and login modals (borrowed from jqueryui/dialog)
+                                // ** http://jqueryui.com/dialog/ ** //
+                                if ( event.keyCode !== $.ui.keyCode.TAB ) {
+                                    return;
+                                }
+                                var tabbables = $(':tabbable', this),
+                                    first = tabbables.filter(':first'),
+                                    last  = tabbables.filter(':last');
+                                if (event.target === last[0] && !event.shiftKey) {
+                                    first.focus(1);
+                                    return false;
+                                } else if (event.target === first[0] && event.shiftKey) {
+                                    last.focus(1);
+                                    return false;
+                                }
+                            });
+                            _PlasticRuntime.system.commitpane.bind('keyup.plastic-commitpane', function(event){
+                                // Manage Enabling, Disabling And Executing Buttons
+                                if ((_PlasticPrefs.AuthUserPattern) && //->
+                                    (_PlasticPrefs.AuthUserPattern.test($('#plastic-auth-user').val())) && //->
+                                    (_PlasticPrefs.AuthPassPattern) && //->
+                                    (_PlasticPrefs.AuthPassPattern.test($('#plastic-auth-pass').val()))) {
+                                    $('#plastic-auth-signon').button('option', 'disabled', false);
+                                } else {
+                                    $('#plastic-auth-signon').button('option', 'disabled', true);
+                                }
+                                if ( event.keyCode === $.ui.keyCode.ENTER ) {
+                                    if ($(event.target).attr('id') === 'plastic-auth-user') {
+                                        $('#plastic-auth-pass').focus();
+                                    } else if ($(event.target).attr('id') === 'plastic-auth-pass') {
+                                        $('#plastic-auth-signon').click();
+                                        $('#plastic-auth-pass').focus();
+                                    }
+                                } else if ( event.keyCode === $.ui.keyCode.ESCAPE ) {
+                                    $('#plastic-auth-abort').click();
+                                } else if ( event.keyCode === $.ui.keyCode.CAPS_LOCK ) {
+                                    $('.plastic-login-capslock').toggleClass('plastic-capslock-on');
+                                } else if (/^[A-Za-z]$/.test( event.key )) { // Caps Lock Detection
+                                    var capAction = (/^[A-Z]$/.test( event.key )) //->
+                                        ? (event.shiftKey) //->
+                                            ? 'removeClass' : 'addClass' //->
+                                        : (event.shiftKey) //->
+                                            ? 'addClass' : 'removeClass';
+                                    $('.plastic-login-capslock')[capAction]('plastic-capslock-on');
+                                }
+                            });
+                            _PlasticRuntime.system.commitpane.on('show.plastic', function(){
+                                $('#plastic-auth-user').focus();
+                            });
+                            _PlasticRuntime.system.commitpane.on('hide.plastic', function(){
+                                _PlasticRuntime.system.commitpane.unbind('keypress.plastic-commitpane');
+                            });
                         }
                         $(_PlasticRuntime.root).on('keyup', function(e){
                             if ((e.shiftKey) && (e.ctrlKey) && (e.keyCode == 70)) { // [Ctrl]-[Shift]-F
@@ -29391,7 +29769,10 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
                                 feedbackTMO = -feedbackTMO;
                             }
                         });
-                        $(_PlasticRuntime.root).on('click', '.plastic-system-feedback-message', function(){
+                        $(_PlasticRuntime.system.feedback).on('mousedown', '.plastic-system-feedback-message', function(){
+                            _PlasticRuntime.system.feedback[0].preFeedback = $(':focus');
+                        });
+                        $(_PlasticRuntime.system.feedback).on('click', '.plastic-system-feedback-message', function(){
                             if (!($(this).hasClass('plastic-system-feedback-question'))) { // Questions Must Be Answered
                                 var decayId = $(this).attr('id');
                                 if (feedbackDecayTMO[decayId]) {
@@ -29405,31 +29786,86 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
                                         Plastic.FeedbackActivate(false);
                                     }
                                 });
+                                if (_PlasticRuntime.system.feedback[0].preFeedback) {
+                                    _PlasticRuntime.system.feedback[0].preFeedback.focus();
+                                    delete(_PlasticRuntime.system.feedback[0].preFeedback);
+                                }
                             }
                         });
                         $(_PlasticRuntime.root).on('click', '.plastic-system-feedback-icontab', function(){
                             Plastic.FeedbackActivate(true);
                         });
-                        $(_PlasticRuntime.root).on('click', '.plastic-system-feedback-control span input', function(e){
-                            if (!(e.originalEvent)) {
-                                e.preventDefault();
-                                $(this).prop('checked', (!($(this).prop('checked'))));
-                            }
-                            if ((e.target.name) && (e.target.name === "confirmall")) {
-                                $(this).prop('checked', false);
-                                $('.plastic-system-feedback-message:not(.plastic-system-feedback-question)').each(function(){
-                                    var decayId = $(this).attr('id');
-                                    if (feedbackDecayTMO[decayId]) {
-                                        clearTimeout(feedbackDecayTMO[decayId]);
-                                        delete(feedbackDecayTMO[decayId]);
+                        $(_PlasticRuntime.system.feedback).on('click', '.plastic-system-feedback-iconwrap', function(e){
+                            var thisTattoo = $('.plastic-system-feedback-icon-tattoo', this);
+                            var thisType = $(this).attr('id').replace(/^plastic-feedback-/, '');
+                            if ((thisType === 'silenceall') || (thisType === 'iconall')) {
+                                var thisDoA = (thisType === 'silenceall') //-> Delete Or Add??
+                                    ? $('.plastic-system-feedback-icon-tattoo', $(this).parent()).is('.ui-icon-volume-off') //->
+                                    : $('.plastic-system-feedback-icon-tattoo', $(this).parent()).is('.ui-icon-minusthick');
+                                var thisIconSet = (thisType === 'silenceall') //->
+                                    ? $(this).nextAll('.plastic-system-feedback-iconwrap:not(:last)') //->
+                                    : $(this).prevAll('.plastic-system-feedback-iconwrap:not(:last)');
+                                thisIconSet.each(function(){
+                                    var childTattoo = $('.plastic-system-feedback-icon-tattoo', this);
+                                    var childType = $(this).attr('id').replace(/^plastic-feedback-/, '');
+                                    if (thisDoA) { // Delete Or Add??
+                                        childTattoo.removeClass('ui-icon ui-icon-volume-off ui-icon-minusthick') //->
+                                    } else {
+                                        childTattoo.removeClass('ui-icon-volume-off ui-icon-minusthick') //->
+                                            .addClass( //->
+                                                (thisType === 'silenceall') //->
+                                                    ? 'ui-icon ui-icon-volume-off' //->
+                                                    : 'ui-icon ui-icon-minusthick' //->
+                                            );
                                     }
                                 });
-                                $('.plastic-system-feedback-message:not(.plastic-system-feedback-question)').fadeOut(400, function(){
-                                    $('.plastic-system-feedback-message').remove();
-                                    $('.plastic-system-feedback-icontab').removeClass('plastic-system-feedback-waiting');
-                                    Plastic.FeedbackActivate(false);
-                                });
+                            } else {
+                                if (!(thisTattoo.hasClass('ui-icon'))) { // No Tattoo
+                                    // Toggle Icon-Only
+                                    thisTattoo.addClass('ui-icon ui-icon-minusthick');
+                                    $(this).attr('title', 'Click to silence ' + thisType  + ' messages');
+                                } else if (thisTattoo.hasClass('ui-icon-minusthick')) { // Icon Only
+                                    // Toggle Silent
+                                    thisTattoo.removeClass('ui-icon-minusthick').addClass('ui-icon-volume-off');
+                                    $(this).attr('title', 'Click to enable ' + thisType  + ' messages');
+                                } else if (thisTattoo.hasClass('ui-icon-volume-off')) { // Silent
+                                    // Reset To Standard Feedback
+                                    thisTattoo.removeClass('ui-icon ui-icon-minusthick ui-icon-volume-off');
+                                    $(this).attr('title', 'Click to iconize ' + thisType  + ' messages');
+                                }
                             }
+                            var thisIgnoreList = [], thisIconList = [];
+                            // Find Ignore List
+                            $('.ui-icon-volume-off', $(this).parent()).closest('.plastic-system-feedback-iconwrap').each(function(){
+                                thisIgnoreList[thisIgnoreList.length] = $(this).attr('id').replace(/^plastic-feedback-/, '');
+                            });
+                            // Find Icon List
+                            $('.ui-icon-minusthick', $(this).parent()).closest('.plastic-system-feedback-iconwrap').each(function(){
+                                thisIconList[thisIconList.length] = $(this).attr('id').replace(/^plastic-feedback-/, '');
+                            });
+                            _PlasticPrefs.FeedbackIgnore = new RegExp('^(' + thisIgnoreList.join('|') + ')$');
+                            _PlasticPrefs.FeedbackIconOnly = new RegExp('^(' + thisIconList.join('|') + ')$');
+                            // Save Prefs In Cookie
+                            var expire = new Date();
+                            expire.setYear(expire.getYear() + 1901); // Set Expiration One Year Out
+                            Plastic.Cookie(_PlasticPrefs.FeedbackIgnoreCookie, //->
+                                _PlasticPrefs.FeedbackIgnore.source, undefined, expire);
+                            Plastic.Cookie(_PlasticPrefs.FeedbackIconCookie, //->
+                                _PlasticPrefs.FeedbackIconOnly.source, undefined, expire);
+                        });
+                        $(_PlasticRuntime.system.feedback).on('click', '.plastic-system-feedback-control-button', function(e){
+                            $('.plastic-system-feedback-message:not(.plastic-system-feedback-question)').each(function(){
+                                var decayId = $(this).attr('id');
+                                if (feedbackDecayTMO[decayId]) {
+                                    clearTimeout(feedbackDecayTMO[decayId]);
+                                    delete(feedbackDecayTMO[decayId]);
+                                }
+                            });
+                            $('.plastic-system-feedback-message:not(.plastic-system-feedback-question)').fadeOut(400, function(){
+                                $('.plastic-system-feedback-message').remove();
+                                $('.plastic-system-feedback-icontab').removeClass('plastic-system-feedback-waiting');
+                                Plastic.FeedbackActivate(false);
+                            });
                         });
                         $(_PlasticRuntime.root).on('click', '.plastic-system-feedback-control span', function(e){
                             if (e.target.nodeName !== 'INPUT') {
@@ -29515,6 +29951,7 @@ function(){return v(this)};g.detach=function(){this.win=this.anchorNode=this.foc
     };
 })(window, jQuery);
 
+
 jQuery(window).load(function(){
     Plastic.Init();
 });
@@ -29532,7 +29969,7 @@ jQuery(window).load(function(){
 / Support Contact: plastic@centurylink.com
 /
 / Created: 04 January, 2014
-/ Last Updated: 10 February, 2016
+/ Last Updated: 10 February, 2017
 /
 / VERSION: 1.0.0b
 /
@@ -29591,6 +30028,7 @@ function PlasticDatastore(name, fopts) {
     var _dirtyCount;
     var error = {};
     var sorted = {};
+    var flattened = {};
     //dirty['D63E5D17-1044-3DA0-B950-2B63B892D421'] = { dirty : true };
     var flags = {};
     var cacheSize = 0;
@@ -29622,15 +30060,18 @@ function PlasticDatastore(name, fopts) {
        ,delimiter: '/'
        ,trimDelimiter: false
        ,includeRoot: false
+       ,prettyNames: null
     };
     var views = { "default" : [] }; // Bound framework views
+    this.version = '1.0.0b1';
+    this.release = 'Public Beta [Epoxy]';
     this.option = function _PlasticDatastore_option(name, value, fopts) {
         var retVal;
         if (typeof (name) === 'string') {
             if (value === undefined) {
                 switch (name) {
                     case "securityContext":
-                        retVal = (opts[name] !== undefined) ? JSON.parse(opts[name]) : undefined;
+                        retVal = (name in opts) ? JSON.parse(opts[name]) : undefined;
                         break;
                     case "rowDefault":
                         if (opts[name] !== undefined) {
@@ -29638,6 +30079,9 @@ function PlasticDatastore(name, fopts) {
                         } else {
                             retVal = undefined;
                         }
+                        break;
+                    case "prettyNames":
+                        retVal = (name in opts) ? opts[name] : {};
                         break;
                     default:
                         retVal = (opts[name] !== undefined) ? opts[name] : undefined;
@@ -29664,6 +30108,7 @@ function PlasticDatastore(name, fopts) {
                                        ,next: null //->
                                        ,children: null //->
                                        ,firstChild: null //->
+                                       ,lastChild: null //->
                                        ,actions: null //->
                                        ,ancestorFlag: self._ancestorFlag //->
                                        ,parent: self._parent //->
@@ -29700,6 +30145,7 @@ function PlasticDatastore(name, fopts) {
                                        ,next: null //->
                                        ,children: null //->
                                        ,firstChild: null //->
+                                       ,lastChild: null //->
                                        ,actions: null //->
                                        ,ancestorFlag: self._ancestorFlag //->
                                        ,parent: self._parent //->
@@ -29742,6 +30188,7 @@ function PlasticDatastore(name, fopts) {
                                                ,next: null //->
                                                ,children: null //->
                                                ,firstChild: null //->
+                                               ,lastChild: null //->
                                                ,actions: null //->
                                                ,ancestorFlag: self._ancestorFlag //->
                                                ,parent: self._parent //->
@@ -29882,6 +30329,8 @@ function PlasticDatastore(name, fopts) {
                     case "includeRoot":
                         opts[name] = ((value === true) || (value === false)) ? value : false;
                         break;
+                    case "prettyNames":
+                        opts[name] = (typeof (value) === 'object') ? value : null;
                     default:
                         opts[name] = value;
                 }
@@ -29905,16 +30354,31 @@ function PlasticDatastore(name, fopts) {
         if (views[namespace] === undefined) { views[namespace] = []; };
         views[namespace][views[namespace].length] = arguments[0];
     };
-    this.requestSecurityContextHandler = null;
-    this.requestSecurityContext = function _PlasticDatastore_requestSecurityContext(retFunction) {
+    this.authenticateHandler = null;
+    this.authenticate = function _PlasticDatastore_authenticate(name, password, retFunction, fopts) {
         var thisReturnFunction = function(context){
             if ((retFunction) && (typeof (retFunction) === 'function')) {
                 retFunction.call(this, context);
             } else {
             }
         };
-        if ((this.requestSecurityContextHandler) && (typeof (this.requestSecurityContextHandler) === 'function')) {
-            this.requestSecurityContextHandler.call(this, thisReturnFunction);
+        if ((this.authenicateHandler) && (typeof (this.authenicateHandler) === 'function')) {
+            this.authenicateHandler.call(this, thisReturnFunction);
+        } else {
+            thisReturnFunction.call(this, {});
+        }
+    };
+    this.securityContextHandler = null;
+    this.securityContext = function _PlasticDatastore_securityContext(retFunction) {
+        var thisReturnFunction = function(context){
+            if ((retFunction) && (typeof (retFunction) === 'function')) {
+                self.option.call(this, 'securityContext', context);
+                retFunction.call(this, context);
+            } else {
+            }
+        };
+        if ((this.securityContextHandler) && (typeof (this.securityContextHandler) === 'function')) {
+            this.securityContextHandler.call(this, thisReturnFunction);
         } else {
             thisReturnFunction.call(this, {});
         }
@@ -29930,7 +30394,7 @@ function PlasticDatastore(name, fopts) {
             "key" : thisKey, "parentKey" : thisParentkey, "title" : undefined, "qualifiedTitle" : undefined, "tooltip" : undefined, //->
             "dirty" : null, "error" : null, "deleted" : null, "selected": null, "isolated" : true, "children" : null, //->
             "ancestorFlag" : this._ancestorFlag, "parent" : this._parent, "siblings" : this._siblings, //->
-            "prev" : undefined, "next" : undefined, "firstChild" : undefined, //->
+            "prev" : undefined, "next" : undefined, "firstChild" : undefined, "lastChild" : undefined, //->
             "actions" : this._actions, "sortIndex" : {}, "attributes" : {} };
         if (defaults) {
             var thisDirty = null;
@@ -29979,8 +30443,8 @@ function PlasticDatastore(name, fopts) {
                             ? opts.rootAnchor : rootNodeKey //->
                         : key //->
                     : (key === null) //->
-                        ? (this.readCache(parentkey).firstChild) //->
-                            ? this.readCache(parentkey).firstChild //->
+                        ? (this.readCache(parentkey, fopts).firstChild) //->
+                            ? this.readCache(parentkey, fopts).firstChild //->
                             : null //->
                         : key;
             var cached = (tryCache) ? this.readCache(tryCache, fopts) : undefined;
@@ -29991,43 +30455,48 @@ function PlasticDatastore(name, fopts) {
                 }
             } else {
                 key = ((key === null) && (tryCache)) ? tryCache : key;
-                var thisReadRowContext = function(context) {
-                    if (this.readRowHandler) {
-                        this.readRowHandler.call(datastore, parentkey, key, function(rowObjects, fopts) {
-                            var thisKey = key;
-                            if ((rowObjects.length === 0) || (rowObjects[0].status === 'empty')) {
-                                retFunction([ jQuery.extend(rowObjects[0], { "id" : self.nextSequence() }) ], fopts);
-                            } else if ((rowObjects.length === 0) || (rowObjects[0].status === 'error')) {
-                                // Flag row with error (FindMe!!)
-                            } else {
-                                // Special Case - Prime The Datastore
-                                if (thisKey === null) { thisKey = rowObjects[1].key; };
-                                if ((parentkey === null) && (rootNodeKey === null)) { rootNodeKey = thisKey; };
-                                for (var cntRows = 1; cntRows < rowObjects.length; cntRows++) {
-                                    self.cacheRow(rowObjects[cntRows].key, $.extend( //->
-                                        self.getGenericRowObject(parentkey, rowObjects[cntRows].key), //->
-                                        rowObjects[cntRows]), fopts);
+                var thisReadRowContext = undefined; // Required for self references
+                thisReadRowContext = function(context) {
+                    if (context === _noSecurityContext) {
+                        self.securityContext.call(this, thisReadRowContext);
+                    } else {
+                        if (this.readRowHandler) {
+                            this.readRowHandler.call(datastore, parentkey, key, function(rowObjects, fopts) {
+                                var thisKey = key;
+                                if ((rowObjects.length === 0) || (rowObjects[0].status === 'empty')) {
+                                    retFunction([ jQuery.extend(rowObjects[0], { "id" : self.nextSequence() }) ], fopts);
+                                } else if ((rowObjects.length === 0) || (rowObjects[0].status === 'error')) {
+                                    // Flag row with error (FindMe!!)
+                                } else {
+                                    // Special Case - Prime The Datastore
+                                    if (thisKey === null) { thisKey = rowObjects[1].key; };
+                                    if ((parentkey === null) && (rootNodeKey === null)) { rootNodeKey = thisKey; };
+                                    for (var cntRows = 1; cntRows < rowObjects.length; cntRows++) {
+                                        self.cacheRow(rowObjects[cntRows].key, $.extend( //->
+                                            self.getGenericRowObject(parentkey, rowObjects[cntRows].key), //->
+                                            rowObjects[cntRows]), fopts);
+                                    }
+                                    //var cachedRow = self.readCache(thisKey, fopts);
+                                    //if (cachedRow === null) {
+                                    //    retFunction([ jQuery.extend({}, fopts, { "status" : "empty", "id" : self.nextSequence() })], fopts);
+                                    //} else {
+                                        retFunction(self._safeRowReturn( //->
+                                            [ jQuery.extend({}, fopts, { "status" : "live", "id" : self.nextSequence() }), //->
+                                                self.readCache(thisKey, fopts) ]), fopts);
+                                    //}
                                 }
-                                //var cachedRow = self.readCache(thisKey, fopts);
-                                //if (cachedRow === null) {
-                                //    retFunction([ jQuery.extend({}, fopts, { "status" : "empty", "id" : self.nextSequence() })], fopts);
-                                //} else {
-                                    retFunction(self._safeRowReturn( //->
-                                        [ jQuery.extend({}, fopts, { "status" : "live", "id" : self.nextSequence() }), //->
-                                            self.readCache(thisKey, fopts) ]), fopts);
-                                //}
-                            }
-                        }, fopts);
+                            }, fopts);
+                        }
                     }
-                }
-                if (opts.securityContext === null) {
-                    self.requestSecurityContext.call(this, function(context){
-                        self.option.call(this, 'securityContext', context);
-                        thisReadRowContext.call(this, context);
-                    });
-                } else {
+                };
+                ///if (opts.securityContext === _noSecurityContext) {
+                ///    self.securityContext.call(this, function(context){
+                ///        self.option.call(this, 'securityContext', context);
+                ///        thisReadRowContext.call(this, context);
+                ///    });
+                ///} else {
                     thisReadRowContext.call(this, opts.securityContext);
-                }
+                ///}
             }
         } else {
         }
@@ -30345,6 +30814,100 @@ function PlasticDatastore(name, fopts) {
             }
         } else if (update[0].status === 'selectionupdate') { // Update Selection Array (Object)
             if (update.length > 1) {
+                // Check for unfulfilled elements and manage error conditions
+                var thisUF = {};
+                $('.Plastic').plasticKeyFilter(key).each(function(){
+                    thisUF[$(this).attr('id')] += 1;
+                });
+                for (var thisItem in _PlasticRuntime.inventory) {
+                    if ((thisItem in thisUF) && ('options' in _PlasticRuntime.inventory[thisItem])) {
+                        if ('fulfill' in _PlasticRuntime.inventory[thisItem].options) {
+                            for (var thisCheck in _PlasticRuntime.inventory[thisItem].options.fulfill) {
+                                var thisWasFulfilled = false;
+                                var thisFulfill = _PlasticRuntime.inventory[thisItem].options.fulfill[thisCheck];
+                                var thisTryVal = ((update) && (update.length > 1) && (thisCheck in update[1])) //->
+                                    ? update[1][thisCheck] //->
+                                    : $('#' + thisItem + '_' + thisCheck).val();
+                                if (thisFulfill instanceof Array) { // Simple Fulfill Array
+                                    for (var cntFulfill = 0; cntFulfill < thisFulfill.length; cntFulfill ++) {
+                                        if (thisFulfill[cntFulfill] === thisTryVal) {
+                                            thisWasFulfilled = true;
+                                            break;
+                                        }
+                                    }
+                                    if (thisWasFulfilled) {
+//cl('IS_FULFILLED: ' + thisCheck);
+                                        delete(rowError[thisCheck]);
+                                    } else {
+//cl('IS_NOT_FULFILLED: ' + thisCheck);
+                                        var thisLabel = ((thisItemOpts) && ('prettyNames' in thisItemOpts) && //->
+                                            (thisCheck in thisItemOpts.prettyNames)) //->
+                                            ? thisItemOpts.prettyNames[thisCheck] //->
+                                            : (thisCheck in datastore.option('prettyNames')) //->
+                                                ? datastore.option('prettyNames')[thisCheck] //->
+                                                : thisCheck;
+                                        rowError[thisCheck] = '<span class="plastic-system-feedback-title">Validation Error:</span>' + //->
+                                            'Specified [' + thisLabel + '] \'' + thisTryVal + '\' not an allowed option, ' + //->
+                                            'please select another from its dropdown list.';
+                                    }
+                                } else if ((!(thisFulfill instanceof Array)) && ($('#' + thisFulfill).length)) {
+                                    var thisItemOpts = $('#' + thisItem)[0].plasticopts;
+                                    var thisFFopts = $('#' + thisFulfill)[0].plasticopts;
+                                    var thisSelected = ((thisFFopts) && (thisFFopts.selected)) //->
+                                        ? thisFFopts.selected : null;
+                                    var blend1 = (thisSelected) //-> // Gather Available Fulfill Items
+                                        ? ((rowObject[1].attributes) && (thisSelected in rowObject[1].attributes)) //->
+                                            ? rowObject[1].attributes[thisSelected] //->
+                                            : (thisSelected in rowObject[1]) //->
+                                                ? rowObject[1][thisSelected] : {} //->
+                                        : {};
+                                    var blend2 = (rowDirty) //-> // Gather Dirty Fulfill Items
+                                        ? ((rowDirty.attributes) && (thisSelected in rowDirty.attributes)) //->
+                                            ? rowDirty.attributes[thisSelected] //->
+                                            : (thisSelected in rowDirty) //->
+                                                ? rowDirty[thisSelected] : {} //->
+                                        : {};
+                                    var blend3 = ((update) && (update.length > 1)) //-> // Gather Updated Fulfill Items
+                                        ? (thisSelected in update[1]) //->
+                                            ? update[1][thisSelected] : {} //->
+                                        : {};
+                                    var blended = $.extend({}, blend1, blend2, blend3);
+                                    for (var thisFFtry in blended) {
+                                        if (blended[thisFFtry] === thisTryVal) {
+                                            thisWasFulfilled = true;
+                                            break;
+                                        }
+                                    } 
+                                    if (thisWasFulfilled) {
+//cl('IS_FULFILLED: ' + thisCheck);
+                                        delete(rowError[thisCheck]);
+                                    } else {
+//cl('IS_NOT_FULFILLED: ' + thisCheck);
+                                        var thisLabel = ((thisItemOpts) && ('prettyNames' in thisItemOpts) && //->
+                                            (thisCheck in thisItemOpts.prettyNames)) //->
+                                            ? thisItemOpts.prettyNames[thisCheck] //->
+                                            : (thisCheck in datastore.option('prettyNames')) //->
+                                                ? datastore.option('prettyNames')[thisCheck] //->
+                                                : thisCheck;
+                                        var thisFFlabel = ((thisItemOpts) && ('prettyNames' in thisItemOpts) && //->
+                                            (thisFulfill in thisItemOpts.prettyNames)) //->
+                                            ? thisItemOpts.prettyNames[thisFulfill] //->
+                                            : (thisFulfill in datastore.option('prettyNames')) //->
+                                                ? datastore.option('prettyNames')[thisFulfill] //->
+                                                : thisFulfill;
+                                        var thisFFtitle = (thisFFopts.filterTitle === undefined) //->
+                                            ? 'Selected: ' + thisFFlabel : thisFFopts.filterTitle;
+                                        rowError[thisCheck] = '<span class="plastic-system-feedback-title">Validation Error:</span>' + //->
+                                            'Specified [' + thisLabel + '] \'' + thisTryVal + '\' not found in the ' + //->
+                                            '<nobr>[' + thisFFtitle + ']</nobr> list, please modify your selection.';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // $('.plastic-stack-active').each(function(){cl($(this).data())});
+                // $('.Plastic').plasticKeyFilter(key).each(function(){cl($(this).attr('id'))})
                 for (var thisAttr in update[1]) {
                 }
             }
@@ -30520,6 +31083,50 @@ function PlasticDatastore(name, fopts) {
         delete (dirtyKey.attributes);
         delete (dirtyKey.key);
         var sortedKey = ((sorted[namespace]) && (sorted[namespace][key])) ? sorted[namespace][key] : {};
+        if ((fopts) && (fopts.flatten)) { // Provide "flattened" view of datastore
+//            if (!(namespace in flattened)) { flattened[namespace] = {}; };
+//            if (!(key in flattened[namespace])) {
+//                flattened[namespace][key] = {
+//                    parentKey: (parentKey in cache[key]) ? cache[key].parentKey : null
+//                };
+//            }
+            sortedKey = {
+//                next: (sortedKey.next) //->
+//                    ? sortedKey.next
+//                    : (sortedKey.firstChild) //->
+//                        ? sortedKey.firstChild //->
+//                        : (cache[key].parentKey) //->
+//                            ? ((sorted[namespace]) && (sorted[namespace][cache[key].parentKey])) //->
+//                                ? (sorted[namespace][cache[key].parentKey].next) //->
+//                                    ? sorted[namespace][cache[key].parentKey].next //->
+//                                    : (sorted[namespace][cache[key].parentKey].firstChild) //->
+//                                        ? sorted[namespace][cache[key].parentKey].firstChild //->
+//                                        : null //->
+//                                : null //->
+//                            : null //->
+                next: (sortedKey.firstChild) //->
+                    ? sortedKey.firstChild
+                    : (sortedKey.next) //->
+                        ? sortedKey.next //->
+                        : ((cache[key]) && ('parentKey' in cache[key])) //->
+                            ? ((sorted[namespace]) && (sorted[namespace][cache[key].parentKey])) //->
+                                ? (sorted[namespace][cache[key].parentKey].next) //->
+                                    ? sorted[namespace][cache[key].parentKey].next //->
+                                    : null //->
+                                : null //->
+                            : null //->
+               ,prev: (sortedKey.prev) //->
+                    ? ((sorted[namespace]) && (sorted[namespace][sortedKey.prev])) //->
+                        ? (sorted[namespace][sortedKey.prev].lastChild) //->
+                            ? sorted[namespace][sortedKey.prev].lastChild //->
+                            : sortedKey.prev //->
+                        : sortedKey.prev //->
+                    : ((cache[key]) && ('parentKey' in cache[key])) //->
+                        ? cache[key].parentKey //->
+                        : null //->
+               ,parentKey: this.root(), firstChild: null, lastChild: null //->
+            };
+        }
         var retVal = (cache[key]) //->
             ? jQuery.extend({}, cache[key], dirtyKey, titled, sortedKey) //->
             : ((fopts) && (fopts.safe)) ? {} : null;
@@ -30619,10 +31226,26 @@ function PlasticDatastore(name, fopts) {
         });
         //this._lruBottom(key);
     };
-    this._actions = function _PlasticDatastore__actions(flag, path, against) {
+    this._actions = function _PlasticDatastore__actions(rowObject, path, against) {
         var retVal = {};
-        if ((path) && (/^(parentKey|key|qualifiedTitle|tooltip|deleted|dirty|disabled|isolated|error|hidden|isolated|next|prev)$/.test(path))) {
-            retVal['create'] = retVal['update'] = retVal['delete'] = false;
+        if (path) {
+            if (/^@/.test(path)) { // Test Group Selection
+                var isdeleted = path.replace(/^@/, '') + '#deleted';
+                if (rowObject) {
+                    if ((rowObject.deleted) || //->
+                        ((rowObject.attributes) && (rowObject.attributes[isdeleted]) && //->
+                            (rowObject.attributes[isdeleted][against]))) {
+                        retVal['delete'] = false;
+                    }
+                }
+            } else {
+                if ((rowObject) && (rowObject.deleted)) {
+                    retVal['delete'] = false;
+                }
+            }
+            // Check other CRUD values (FindMe!!)
+            // && (/^(parentKey|key|qualifiedTitle|tooltip|deleted|dirty|disabled|isolated|error|hidden|isolated|next|prev)$/.test(path))) {
+            //retVal['create'] = retVal['update'] = retVal['delete'] = false;
         }
         return retVal;
     };
@@ -31332,6 +31955,7 @@ function PlasticDatastore(name, fopts) {
                         var viewId = thisTree.$tree.attr('id');
                         var thisTreeRoot = view[name].dynatree("getRoot");
                         var prevEnable = thisTree.enableUpdate(false);
+                        var delayedExpands = [];
                         if ((rowObjects.length === 0) || (rowObjects[0].status === 'empty')) {
                             if ((rowObjects.length) && (rowObjects[0].parentKey)) {
                                 // May need work (FindMe!!)
@@ -31417,6 +32041,10 @@ function PlasticDatastore(name, fopts) {
                                         ///if (!(parentnode.isExpanded())) { parentnode.expand(); };
                                     } else { ////if (rowObjects[0].status !== 'cached') { // Null node cached rowObjects cannot exist
                                         node = parentnode.addChild(baseRow);
+                                        if ((rowObjects[cntRow].firstChild !== null) && //->
+                                            (rowObjects[cntRow].firstChild === rowObjects[cntRow].lastChild)) {
+                                            delayedExpands[delayedExpands.length] = node;
+                                        }
                                         node.data.rowObject = rowObjects[cntRow];
                                     }
                                 }
@@ -31439,6 +32067,11 @@ function PlasticDatastore(name, fopts) {
                             }
                         }
                         thisTree.enableUpdate(prevEnable);
+                        if (delayedExpands.length) {
+                            $.each(delayedExpands, function(){
+                                this.expand();
+                            });
+                        }
                     //    $('.plastic-treenode-summary.plastic-unpainted:visible').each(function(){
                     //    ////$('.plastic-treenode-summary:visible').each(function(){
                     //        ////$(this).sparkline('html', $(this).data('sparkopts')).removeClass('plastic-unpainted');
@@ -31547,28 +32180,30 @@ function PlasticDatastore(name, fopts) {
                     $(this).outerHeight($(this).parent().height() - $(this).parent().children('ul:first').outerHeight());
                 });
                 $(this).on('initialize.plastic', function (e) {
-                    e.stopPropagation(); // Prevent this event bubbling to parents
-                    var fopts = ((this) && (this.plasticopts)) ? this.plasticopts : {};
-                    // Make dsname, datastore and namespace common for this "self" object (FindMe!!)
-                    var dsname = (fopts.datastore) ? fopts.datastore : null;
-                    var datastore = ((dsname) && (_PlasticRuntime.datastore[dsname])) //->
-                        ? _PlasticRuntime.datastore[dsname] : null; 
-                    var rowsRead = function() {
-                        self.rowsRead.apply(self, arguments);
-                        if ((self.length) && (self[0].plasticopts)) {
-                            if (self[0].plasticopts.autoExpand) {
-                                self.dynatree('getRoot').visit(function(node){
-                                    node.expand(true);
-                                });
+                    if (e.target === this) { // Direct events only
+                        e.stopPropagation(); // Prevent this event bubbling to parents
+                        var fopts = ((this) && (this.plasticopts)) ? this.plasticopts : {};
+                        // Make dsname, datastore and namespace common for this "self" object (FindMe!!)
+                        var dsname = (fopts.datastore) ? fopts.datastore : null;
+                        var datastore = ((dsname) && (_PlasticRuntime.datastore[dsname])) //->
+                            ? _PlasticRuntime.datastore[dsname] : null; 
+                        var rowsRead = function() {
+                            self.rowsRead.apply(self, arguments);
+                            if ((self.length) && (self[0].plasticopts)) {
+                                if (self[0].plasticopts.autoExpand) {
+                                    self.dynatree('getRoot').visit(function(node){
+                                        node.expand(true);
+                                    });
+                                }
                             }
+                        };
+                        if ((fopts) && (fopts.defaultTarget) && (_PlasticRuntime.inventory[fopts.defaultTarget]) && //->
+                            (_PlasticRuntime.inventory[fopts.defaultTarget].options) && //->
+                            (_PlasticRuntime.inventory[fopts.defaultTarget].options.isDefault)) {
+                            fopts._hasDefault = _PlasticRuntime.inventory[fopts.defaultTarget].options.isDefault;
                         }
-                    };
-                    if ((fopts) && (fopts.defaultTarget) && (_PlasticRuntime.inventory[fopts.defaultTarget]) && //->
-                        (_PlasticRuntime.inventory[fopts.defaultTarget].options) && //->
-                        (_PlasticRuntime.inventory[fopts.defaultTarget].options.isDefault)) {
-                        fopts._hasDefault = _PlasticRuntime.inventory[fopts.defaultTarget].options.isDefault;
+                        if (datastore) { datastore.readRows(null, null, rowsRead, fopts); };
                     }
-                    if (datastore) { datastore.readRows(null, null, rowsRead, fopts); };
                 });
                 $(this).addClass('plastic-scroll-container');
                 $(this).on('click', '.plastic-treenode-state.plastic-disabled', function(e){
@@ -32064,63 +32699,65 @@ function PlasticDatastore(name, fopts) {
                 //        }
 
                 $(this).on('initialize.plastic', function (e) {
-                    $(this).children('table:first').dataTable({
-                        processing: true
-                       ,serverSide: true
-                       ,ajax: this.PlasticAjax
-                       ,columnDefs: [
-                            {
-                                "class": 'plastic-list-flagbox'
-                               ,orderable: false
-                               ,render: function() {
-                                    var thisChecked = (/\[.*S.*\]/.test(arguments[0])) ? ' checked' : '';
-                                    return '<input class="plastic-view-list-selector" name="' + //->
-                                        thisId + '_select" type="' + thisType + '"' + thisChecked + '>';
-                                }
-                               ,targets: 0
-                            }
-                           ,{
-                                render: function(data, type, row, meta) {
-                                    var retVal = data;
-                                    if (typeof (retVal) === 'boolean') {
-                                        retVal = '<span class="plastic-checkable-icon ui-icon ui-icon-' + ((retVal) ? 'check' : 'blank') + '"></span>';
+                    if (e.target === this) { // Direct events only
+                        $(this).children('table:first').dataTable({
+                            processing: true
+                           ,serverSide: true
+                           ,ajax: this.PlasticAjax
+                           ,columnDefs: [
+                                {
+                                    "class": 'plastic-list-flagbox'
+                                   ,orderable: false
+                                   ,render: function() {
+                                        var thisChecked = (/\[.*S.*\]/.test(arguments[0])) ? ' checked' : '';
+                                        return '<input class="plastic-view-list-selector" name="' + //->
+                                            thisId + '_select" type="' + thisType + '"' + thisChecked + '>';
                                     }
-                                /*
-                                    if ((row.rowObject) && (row.rowObject.dirty)) {
-                                        if (meta.settings.aoColumns[meta.col].data) {
+                                   ,targets: 0
+                                }
+                               ,{
+                                    render: function(data, type, row, meta) {
+                                        var retVal = data;
+                                        if (typeof (retVal) === 'boolean') {
+                                            retVal = '<span class="plastic-checkable-icon ui-icon ui-icon-' + ((retVal) ? 'check' : 'blank') + '"></span>';
                                         }
+                                    /*
+                                        if ((row.rowObject) && (row.rowObject.dirty)) {
+                                            if (meta.settings.aoColumns[meta.col].data) {
+                                            }
+                                        }
+                                    */
+                                        return retVal;
                                     }
-                                */
-                                    return retVal;
+                                   ,targets: allColsButFlag
                                 }
-                               ,targets: allColsButFlag
-                            }
-                           ,{   "visible": false,  "targets": invisibleTargets }
-                        ]
-                       ,rowCallback: function(row, data) {
-                            if ((data) && (data.rowObject)) {
-                                if (data.rowObject.deleted) { $(row).addClass('plastic-deleted'); };
-                                if (data.rowObject.dirty) { $(row).addClass('plastic-dirty'); };
-                                if (datastore) {
-                                    var selected = datastore.option('selected');
-                                    // Target Deleted/ Dirty Columns (FindMe!!)
-                                    $(row).children('td').each(function(){
-                                    });
+                               ,{   "visible": false,  "targets": invisibleTargets }
+                            ]
+                           ,rowCallback: function(row, data) {
+                                if ((data) && (data.rowObject)) {
+                                    if (data.rowObject.deleted) { $(row).addClass('plastic-deleted'); };
+                                    if (data.rowObject.dirty) { $(row).addClass('plastic-dirty'); };
+                                    if (datastore) {
+                                        var selected = datastore.option('selected');
+                                        // Target Deleted/ Dirty Columns (FindMe!!)
+                                        $(row).children('td').each(function(){
+                                        });
+                                    }
                                 }
                             }
-                        }
-                       ,order: [ 1, 'asc' ]
-                       ,paging: false
-                       ,searching: false
-                       ,info: false
-                       ,scrollX: true
-                       ,scrollY: '100%'
-                       ,scrollCollapse: false
-                       ,deferRender: true
-                       ,dom: 'frtiS'
-                       ,columns: columns
-                    });
-                    $(this).find('.dataTables_scrollBody').addClass('plastic-scroll-container');
+                           ,order: [ 1, 'asc' ]
+                           ,paging: false
+                           ,searching: false
+                           ,info: false
+                           ,scrollX: true
+                           ,scrollY: '100%'
+                           ,scrollCollapse: false
+                           ,deferRender: true
+                           ,dom: 'frtiS'
+                           ,columns: columns
+                        });
+                        $(this).find('.dataTables_scrollBody').addClass('plastic-scroll-container');
+                    }
                 });
                 return $(this);
             }
@@ -32135,10 +32772,10 @@ function PlasticDatastore(name, fopts) {
             var targetName = ((xtra) && (xtra.target)) ? xtra.target : self[0];
             var thisTarget = self._findTarget(targetName);
             var namespace = ((viewargs) && (viewargs.length > 1) && (viewargs[1].namespace)) ? viewargs[1].namespace : 'default';
-            // See if Tests Are Required to Activate Row
+            // See if Tests Are Required to Allow Row Activation
             var canActivate = true;
-            if ((viewargs) && (viewargs.length > 1) && (viewargs[1].test)) {
-                var tests = viewargs[1].test;
+            if ((viewargs) && (viewargs.length > 1) && (viewargs[1].allowIf)) {
+                var tests = viewargs[1].allowIf;
                 for (var cntTest = 0; cntTest < tests.length; cntTest ++) {
                     canActivate = Plastic.Test.call(targetName, this.data.rowObject, tests[cntTest], viewargs[1]);
                     if (!(canActivate)) { break; }; // One false is enough
@@ -32347,7 +32984,7 @@ $(document).ready(function(){
 / Support Contact: plastic@centurylink.com
 /
 / Created: 04 January, 2014
-/ Last Updated: 10 February, 2016
+/ Last Updated: 10 February, 2017
 /
 / VERSION: 1.0.0b
 /
@@ -32544,8 +33181,13 @@ $(document).ready(function(){
                         }
                     }
                 });
-                $(this).on('click', '.plastic-field-select', function(){
-                    $(this).autocomplete('close');
+                $(this).on('click', 'input.plastic-field-select', function(){
+                    if ($(this).autocomplete('widget').is(':visible')) {
+                        $(this).autocomplete('close');
+                    } else {
+                        $('*[autocomplete]').autocomplete('close'); // Close any open autocompletes
+                        $(this).focus().select().autocomplete('search', '');
+                    }
                 });
                 $(this).on('click', '.plastic-field-dropdown', function(){
                     if (!($(this).children('div:first').hasClass('plastic-disabled'))) {
@@ -32553,7 +33195,7 @@ $(document).ready(function(){
                             $(this).prev('input').autocomplete('close');
                         } else {
                             $('*[autocomplete]').autocomplete('close'); // Close any open autocompletes
-                            $(this).prev('input').autocomplete('search','');
+                            $(this).prev('input').focus().select().autocomplete('search','');
                         }
                     }
                 });
@@ -32880,7 +33522,7 @@ $(document).ready(function(){
                                     var groupHeaderRow = '';
                                     var groupHeaders = [];
                                     var groupLabels = [];
-                                    thisRow += '<td colspan="4">'; // Fix This Quick (FindMe!!)
+                                    thisRow += '<td colspan="2">'; // Fix This Quick (FindMe!!)
                                     thisRow += '<fieldset class="plastic-field-group" name="' + thisId + '" id="' + thisId + '">';
                                     thisRow += '<legend class="plastic-field-group-legend">' + thisNameLabel + ':' + thisButtons + '</legend>';
                                     thisRow += '<div class="plastic-field-group-wrapper">';
@@ -33135,9 +33777,12 @@ $(document).ready(function(){
                             });
                         }
                     }
-                    $(this).find('.plastic-field-group-wrapper').each(function(){
-                        $(this).width($(this).closest('.Plastic.widget-form').innerWidth() * .92);
-                    });
+                    //$(this).find('.plastic-field-group-wrapper').each(function(){ // Retire?? (FindMe!!)
+                    //    var closeForm = $(this).closest('.Plastic.widget-form');
+                    //    if (closeForm.is(':visible')) {
+                    //        $(this).width(closeForm.innerWidth() * .92);
+                    //    }
+                    //});
                     ///$('.plastic-field-group-table').dataTable({ scrollY: 300, paging: false, searching: false });
                     $(this).find('.plastic-field-group-table').each(function(){
                         var thisTable = $(this).closest('.plastic-field-group').attr('id');
@@ -33194,14 +33839,17 @@ $(document).ready(function(){
                                 .appendTo( ul );
                         };
                     });
-                    $(this).scrollTop(0); // Scroll form to top before switching focus
                     thisForm.disable(undefined, rowObjects[1], {});
-                    $('#' + focusId).focus().select(); // Switch focus to form element
                     // DataTable Bug Work-Around?? (FindMe!!)
                     $(this).find('.plastic-field-group .plastic-field-group-table tr').each(function(){
                         $(this).find('th:eq(1)').triggerHandler('click');
                     });
-                    if ((rowObjects.length > 1) && (rowObjects[1].deleted)) { thisForm.disable(true); };
+                    if ((rowObjects.length > 1) && //->
+                        ((rowObjects[1].deleted) || (rowObjects[1].disabled))) {
+                        thisForm.disable(true);
+                    }
+                    $(this).scrollTop(0); // Scroll form to top before switching focus
+                    $('#' + focusId).focus().select(); // Switch focus to form element
                 };
                 ///PlasticUnit.call(this, 'PlasticWidget', 'Render Defined', function() {
                 /*
@@ -33215,6 +33863,7 @@ $(document).ready(function(){
                 thisForm.update = function _plasticwidget_form_update(rowObjects) {
                     var formId = $(this).attr('id');
                     var thisReplace = new RegExp('^' + formId + '_');
+                    var fulfill = ((self.length) && (self[0].plasticopts) && (self[0].plasticopts.fulfill)) ? self[0].plasticopts.fulfill : null;
                     this.source = (rowObjects[0].source) ? rowObjects[0].source : undefined;
                     $(this).data('plastic-row', rowObjects[1]);
                     if ((rowObjects.length > 1) && (rowObjects[1].deleted)) { thisForm.disable(true); };
@@ -33957,9 +34606,9 @@ return true;
                     this.rowObject = ((rowObjects) && (rowObjects.length > 1)) ? rowObjects[1] : undefined;
                     if ((fopts) && (rowObjects) && (rowObjects.length > 1)) {
                         if (fopts.defaultheight !== undefined) {
-                            $(self).dialog('option', 'height', fopts.defaultheight);
+                            $(self).dialog('option', 'height', parseInt(fopts.defaultheight));
                         }
-                        if (fopts.defaultwidth !== undefined) {
+                        if (fopts.defaultwidth !== undefined) { // Add Proportional "%" Calculation? (FindMe!!)
                             $(self).dialog('option', 'width', fopts.defaultwidth);
                         }
                         if (fopts.title !== undefined) {
@@ -34494,9 +35143,9 @@ return true;
                 thisFilterDiv += '  <div id="' + thisId + '_right" class="plastic-filterlist-right">';
                 thisFilterDiv += '    <div class="plastic-filterlist-top">';
                 thisFilterDiv += '      <label class="plastic-filterlist-title">' + rightLabel + ':</label>';
-                thisFilterDiv += '      <div class="plastic-filterlist-selectall"><span class="ui-icon ui-icon-plus" title="Select All" /></div>';
-                thisFilterDiv += '      <div class="plastic-filterlist-refreshall"><span class="ui-icon ui-icon-refresh" title="Refresh Sorting" /></div>';
                 thisFilterDiv += '      <div class="plastic-filterlist-searchwrap">';
+                thisFilterDiv += '        <div class="plastic-filterlist-selectall"><span class="ui-icon ui-icon-plus" title="Select All" /></div>';
+                thisFilterDiv += '        <div class="plastic-filterlist-refreshall"><span class="ui-icon ui-icon-refresh" title="Refresh Sorting" /></div>';
                 thisFilterDiv += '        <div class="plastic-filterlist-search">';
                 thisFilterDiv += '          <span class="ui-icon ui-icon-search"></span>';
                 thisFilterDiv += '          <div><input type="text" name="' + thisId + '_search"></div>';
@@ -34515,13 +35164,14 @@ return true;
 ///                    $(this).outerHeight($(this).parent().height() - $(this).parent().children('ul:first').outerHeight());
 ///                    thisWidget.adjustWidth();
 ///                });
-                this.fulfillList = function(selected){
+                this.fulfillList = function(selected, hitOnly){
                     var retVal = [];
                     for (var thisItem in listItems) {
                         if ((listSelected[listItems[thisItem]] !== undefined) && //->
                             (/^[0-9-]/.test(listSelected[listItems[thisItem]]))) {
                             var thisClass = ((selected) && (listItems[thisItem] === selected)) //->
                                 ? 'plastic-autofill-selected' : 'plastic-autofill-item';
+                            if ((hitOnly) && thisClass !== 'plastic-autofill-selected') { continue; };
                             retVal[retVal.length] = { key: thisItem, 'class': thisClass, value: listItems[thisItem] };
                         }
                     }
@@ -34604,68 +35254,40 @@ return true;
                     $(thisWidget).find('.plastic-filterlist-complete li').sort(sorter).appendTo($(thisWidget).find('.plastic-filterlist-complete div'));
                 };
                 this.adjustWidth = function() {
-                    $(thisWidget).find('.plastic-filterlist-complete div, .plastic-filterlist-selected div').css({ width: 'auto' });
-                    $(thisWidget).find('.plastic-filterlist-complete, .plastic-filterlist-selected').each(function(){
-                        $(this).children('div').width( this.scrollWidth );
-                    });
+                //    $(thisWidget).find('.plastic-filterlist-complete div, .plastic-filterlist-selected div').css({ width: 'auto' });
+                //    $(thisWidget).find('.plastic-filterlist-complete, .plastic-filterlist-selected').each(function(){
+                //        $(this).children('div').width( this.scrollWidth );
+                //    });
                 };
                 this.rowsRead = function _plasticwidget_filterlist_rowsRead(rowObjects, fopts) {
+                    var display = ((self.length > 0) && (self[0].plasticopts) && (self[0].plasticopts.display)) ? self[0].plasticopts.display : null;
+                    var tooltip = ((self.length > 0) && (self[0].plasticopts) && (self[0].plasticopts.tooltip)) //->
+                        ? self[0].plasticopts.tooltip //->
+                        : (display) ? display : null;
                     if (rowObjects) {
-                        if (rowObjects.length === 1) {
-                            while (listHierarchy.length) {
-                                var tryNext = listHierarchy.pop();
-                                if (tryNext[1] === null) { continue; };
-                                datastore.readRows(tryNext[0], tryNext[1], thisWidget.rowsRead, { namespace: namespace });
-                                break;
-                            }
-                            if (listHierarchy.length === 0) {
-                                // Clear Selected List
-                                $(thisWidget).find('.plastic-filterlist-selected div').html('');
-                                var thisComplete = $(thisWidget).find('.plastic-filterlist-complete div');
-                                var completeList = [];
-                                for (var thisItem in listItems) {
-                                    completeList[completeList.length] = '<li class="ui-element ui-state-default" ' + //->
-                                        ' itemKey="' + thisItem + '"' + //->
-                                        ' title="' + listItems[thisItem] + '">' + //->
-                                        '<span class="ui-icon ui-icon-plus plastic-filterlist-select" />' + listItems[thisItem] + '</li>';
-                                }
-                                thisComplete.html($(completeList.join('')));
-                            }
-                        } else {
-                            var thisKeys = {};
-                            // Collect These Keys
-                            for (var cntRowObject = 1; cntRowObject < rowObjects.length; cntRowObject ++) {
-                                thisKeys[rowObjects[cntRowObject].key] = 1;
-                            }
-                            // Process These Keys
-                            for (var cntRowObject = 1; cntRowObject < rowObjects.length; cntRowObject ++) {
-                                var rowObject = rowObjects[cntRowObject];
-                                var parentkey = rowObject.parentKey;
-                                var key = rowObject.key;
-                                var prev = rowObject.prev;
-                                var next = rowObject.next;
-                                if (listItems[key] === undefined) {
-                                    ///cl('ROW0: ' + rowObjects[1].title);
-                                    ///cl('ROW1: ' + rowObjects[1].attributes.name);
-                                    ///listItems[key] = rowObject.title;
-                                    listItems[key] = rowObject.attributes.name;
-                                    listHierarchy[listHierarchy.length] = [parentkey, next];
-                                    datastore.readRows(key, null, thisWidget.rowsRead, { namespace: namespace });
-                                } else if (next) {
-                                    if (!(thisKeys[next])) {
-                                        datastore.readRows(key, next, thisWidget.rowsRead, { namespace: namespace });
-                                    }
-                                }
-                            }
+                        // Clear Selected List // rowObject.attributes.name
+                        $(thisWidget).find('.plastic-filterlist-selected div').html('');
+                        var thisComplete = $(thisWidget).find('.plastic-filterlist-complete div');
+                        var completeList = [];
+                        for (var cntRow = 1; cntRow < rowObjects.length; cntRow ++) {
+                            var rowObject = rowObjects[cntRow];
+                            var thisKey = rowObject.key;
+                            var thisTooltip = ((tooltip) && (tooltip in rowObject.attributes)) //->
+                                ? rowObject.attributes[tooltip] //->
+                                : ((tooltip) && (tooltip in rowObject)) ? rowObject[tooltip] : null;
+                            listItems[thisKey] = ((display) && (display in rowObject.attributes)) //->
+                                ? rowObject.attributes[display] //->
+                                : ((display) && (display in rowObject)) ? rowObject[display] : null;
+                            completeList[completeList.length] = '<li class="ui-element ui-state-default" ' + //->
+                                ' itemKey="' + thisKey + '"' + //->
+                                ' title="' + thisTooltip + '">' + //->
+                                '<span class="ui-icon ui-icon-plus plastic-filterlist-select"' + //->
+                                ' title="Toggle This Selection" />' + listItems[thisKey] + '</li>';
+                                //' title="Toggle This Selection" />' + //->
+                                //'<span class="plastic-filterlist-sizer">' + listItems[thisKey] + '</span></li>';
                         }
+                        thisComplete.html($(completeList.join('')));
                     }
-                };
-                this.bindDatastore = function _plasticwidget_filterlist_bindDatastore(){
-                    datastore.readRows(null, null, thisWidget.rowsRead, { namespace: namespace });
-                    //var namespace = (arguments.length == 2) ? arguments[1] : "default";
-                    //datastore[namespace] = arguments[0];
-                    //datastore[namespace].bindView(this, namespace);
-                    //datastore[namespace].readRows(null, null, self.rowsRead, { namespace: namespace });
                 };
                 this.render = function _plasticwidget_filterlist_render(rowObjects){
                     self._register.call(this, rowObjects);
@@ -34733,8 +35355,14 @@ return true;
                 };
 */
                 this.init = function _plasticwidget_filterlist_init(){
+                    throw new Error('_plasticwidget_filterlist_init');
                     datastore.readRows(null, null, thisWidget.rowsRead, { namespace: namespace });
                 };
+                $(this).on('initialize.plastic', function (e) {
+                    if (e.target === this) { // Direct events only
+                        datastore.readRows(null, null, thisWidget.rowsRead, { namespace: namespace, flatten: true });
+                    }
+                });
                 return $(this);
             }
            ,menu: function _plasticwidget__make_menu(fopts) {
@@ -34799,10 +35427,12 @@ return true;
                     $(this).find('.plastic-iframe-frame:first').attr({ 'src' : 'about:blank' });
                 });
                 $(this).on('initialize.plastic', function (e) {
-                    if ($(this).is('.plastic-visible-inactive')) {
-                        var thisLocation = ((fopts) && (fopts.random === false)) //->
-                            ? baseLocation : baseLocation + '?uniq=' + Math.random();
-                        $(this).find('.plastic-iframe-frame:first').attr({ 'src' : thisLocation });
+                    if (e.target === this) { // Direct events only
+                        if ($(this).is('.plastic-visible-inactive')) {
+                            var thisLocation = ((fopts) && (fopts.random === false)) //->
+                                ? baseLocation : baseLocation + '?uniq=' + Math.random();
+                            $(this).find('.plastic-iframe-frame:first').attr({ 'src' : thisLocation });
+                        }
                     }
                 });
                 $(this).append($('<iframe class="plastic-iframe-frame" id="' + thisId + '_frame" src="about:blank" />'));
@@ -53643,3 +54273,175 @@ $.extend($.ui.multiselect, {
 
 
 })(jQuery);
+/*
+ A JavaScript implementation of the SHA family of hashes, as
+ defined in FIPS PUB 180-4 and FIPS PUB 202, as well as the corresponding
+ HMAC implementation as defined in FIPS PUB 198a
+
+ Copyright Brian Turek 2008-2017
+ Distributed under the BSD License
+ See http://caligatio.github.com/jsSHA/ for more information
+
+ Several functions taken from Paul Johnston
+*/
+'use strict';(function(Y){function C(b,a,c){var g=0,d=[],n=0,h,l,e,f,m,q,u,r,I=!1,v=[],w=[],t,y=!1,A=!1,x=-1;c=c||{};h=c.encoding||"UTF8";t=c.numRounds||1;if(t!==parseInt(t,10)||1>t)throw Error("numRounds must a integer >= 1");if("SHA-1"===b)m=512,q=K,u=Z,f=160,r=function(a){return a.slice()};else if(0===b.lastIndexOf("SHA-",0))if(q=function(a,c){return L(a,c,b)},u=function(a,c,g,d){var k,f;if("SHA-224"===b||"SHA-256"===b)k=(c+65>>>9<<4)+15,f=16;else if("SHA-384"===b||"SHA-512"===b)k=(c+129>>>10<<
+5)+31,f=32;else throw Error("Unexpected error in SHA-2 implementation");for(;a.length<=k;)a.push(0);a[c>>>5]|=128<<24-c%32;c=c+g;a[k]=c&4294967295;a[k-1]=c/4294967296|0;g=a.length;for(c=0;c<g;c+=f)d=L(a.slice(c,c+f),d,b);if("SHA-224"===b)a=[d[0],d[1],d[2],d[3],d[4],d[5],d[6]];else if("SHA-256"===b)a=d;else if("SHA-384"===b)a=[d[0].a,d[0].b,d[1].a,d[1].b,d[2].a,d[2].b,d[3].a,d[3].b,d[4].a,d[4].b,d[5].a,d[5].b];else if("SHA-512"===b)a=[d[0].a,d[0].b,d[1].a,d[1].b,d[2].a,d[2].b,d[3].a,d[3].b,d[4].a,
+d[4].b,d[5].a,d[5].b,d[6].a,d[6].b,d[7].a,d[7].b];else throw Error("Unexpected error in SHA-2 implementation");return a},r=function(a){return a.slice()},"SHA-224"===b)m=512,f=224;else if("SHA-256"===b)m=512,f=256;else if("SHA-384"===b)m=1024,f=384;else if("SHA-512"===b)m=1024,f=512;else throw Error("Chosen SHA variant is not supported");else if(0===b.lastIndexOf("SHA3-",0)||0===b.lastIndexOf("SHAKE",0)){var F=6;q=D;r=function(a){var b=[],d;for(d=0;5>d;d+=1)b[d]=a[d].slice();return b};x=1;if("SHA3-224"===
+b)m=1152,f=224;else if("SHA3-256"===b)m=1088,f=256;else if("SHA3-384"===b)m=832,f=384;else if("SHA3-512"===b)m=576,f=512;else if("SHAKE128"===b)m=1344,f=-1,F=31,A=!0;else if("SHAKE256"===b)m=1088,f=-1,F=31,A=!0;else throw Error("Chosen SHA variant is not supported");u=function(a,b,d,c,g){d=m;var k=F,f,h=[],n=d>>>5,l=0,e=b>>>5;for(f=0;f<e&&b>=d;f+=n)c=D(a.slice(f,f+n),c),b-=d;a=a.slice(f);for(b%=d;a.length<n;)a.push(0);f=b>>>3;a[f>>2]^=k<<f%4*8;a[n-1]^=2147483648;for(c=D(a,c);32*h.length<g;){a=c[l%
+5][l/5|0];h.push(a.b);if(32*h.length>=g)break;h.push(a.a);l+=1;0===64*l%d&&D(null,c)}return h}}else throw Error("Chosen SHA variant is not supported");e=M(a,h,x);l=B(b);this.setHMACKey=function(a,d,c){var k;if(!0===I)throw Error("HMAC key already set");if(!0===y)throw Error("Cannot set HMAC key after calling update");if(!0===A)throw Error("SHAKE is not supported for HMAC");h=(c||{}).encoding||"UTF8";d=M(d,h,x)(a);a=d.binLen;d=d.value;k=m>>>3;c=k/4-1;if(k<a/8){for(d=u(d,a,0,B(b),f);d.length<=c;)d.push(0);
+d[c]&=4294967040}else if(k>a/8){for(;d.length<=c;)d.push(0);d[c]&=4294967040}for(a=0;a<=c;a+=1)v[a]=d[a]^909522486,w[a]=d[a]^1549556828;l=q(v,l);g=m;I=!0};this.update=function(a){var b,c,k,f=0,h=m>>>5;b=e(a,d,n);a=b.binLen;c=b.value;b=a>>>5;for(k=0;k<b;k+=h)f+m<=a&&(l=q(c.slice(k,k+h),l),f+=m);g+=f;d=c.slice(f>>>5);n=a%m;y=!0};this.getHash=function(a,c){var k,h,e,m;if(!0===I)throw Error("Cannot call getHash after setting HMAC key");e=N(c);if(!0===A){if(-1===e.shakeLen)throw Error("shakeLen must be specified in options");
+f=e.shakeLen}switch(a){case "HEX":k=function(a){return O(a,f,x,e)};break;case "B64":k=function(a){return P(a,f,x,e)};break;case "BYTES":k=function(a){return Q(a,f,x)};break;case "ARRAYBUFFER":try{h=new ArrayBuffer(0)}catch(p){throw Error("ARRAYBUFFER not supported by this environment");}k=function(a){return R(a,f,x)};break;default:throw Error("format must be HEX, B64, BYTES, or ARRAYBUFFER");}m=u(d.slice(),n,g,r(l),f);for(h=1;h<t;h+=1)!0===A&&0!==f%32&&(m[m.length-1]&=16777215>>>24-f%32),m=u(m,f,
+0,B(b),f);return k(m)};this.getHMAC=function(a,c){var k,h,e,p;if(!1===I)throw Error("Cannot call getHMAC without first setting HMAC key");e=N(c);switch(a){case "HEX":k=function(a){return O(a,f,x,e)};break;case "B64":k=function(a){return P(a,f,x,e)};break;case "BYTES":k=function(a){return Q(a,f,x)};break;case "ARRAYBUFFER":try{k=new ArrayBuffer(0)}catch(v){throw Error("ARRAYBUFFER not supported by this environment");}k=function(a){return R(a,f,x)};break;default:throw Error("outputFormat must be HEX, B64, BYTES, or ARRAYBUFFER");
+}h=u(d.slice(),n,g,r(l),f);p=q(w,B(b));p=u(h,f,m,p,f);return k(p)}}function c(b,a){this.a=b;this.b=a}function O(b,a,c,g){var d="";a/=8;var n,h,e;e=-1===c?3:0;for(n=0;n<a;n+=1)h=b[n>>>2]>>>8*(e+n%4*c),d+="0123456789abcdef".charAt(h>>>4&15)+"0123456789abcdef".charAt(h&15);return g.outputUpper?d.toUpperCase():d}function P(b,a,c,g){var d="",n=a/8,h,e,p,f;f=-1===c?3:0;for(h=0;h<n;h+=3)for(e=h+1<n?b[h+1>>>2]:0,p=h+2<n?b[h+2>>>2]:0,p=(b[h>>>2]>>>8*(f+h%4*c)&255)<<16|(e>>>8*(f+(h+1)%4*c)&255)<<8|p>>>8*(f+
+(h+2)%4*c)&255,e=0;4>e;e+=1)8*h+6*e<=a?d+="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".charAt(p>>>6*(3-e)&63):d+=g.b64Pad;return d}function Q(b,a,c){var g="";a/=8;var d,e,h;h=-1===c?3:0;for(d=0;d<a;d+=1)e=b[d>>>2]>>>8*(h+d%4*c)&255,g+=String.fromCharCode(e);return g}function R(b,a,c){a/=8;var g,d=new ArrayBuffer(a),e;e=-1===c?3:0;for(g=0;g<a;g+=1)d[g]=b[g>>>2]>>>8*(e+g%4*c)&255;return d}function N(b){var a={outputUpper:!1,b64Pad:"=",shakeLen:-1};b=b||{};a.outputUpper=b.outputUpper||
+!1;!0===b.hasOwnProperty("b64Pad")&&(a.b64Pad=b.b64Pad);if(!0===b.hasOwnProperty("shakeLen")){if(0!==b.shakeLen%8)throw Error("shakeLen must be a multiple of 8");a.shakeLen=b.shakeLen}if("boolean"!==typeof a.outputUpper)throw Error("Invalid outputUpper formatting option");if("string"!==typeof a.b64Pad)throw Error("Invalid b64Pad formatting option");return a}function M(b,a,c){switch(a){case "UTF8":case "UTF16BE":case "UTF16LE":break;default:throw Error("encoding must be UTF8, UTF16BE, or UTF16LE");
+}switch(b){case "HEX":b=function(a,b,e){var h=a.length,l,p,f,m,q,u;if(0!==h%2)throw Error("String of HEX type must be in byte increments");b=b||[0];e=e||0;q=e>>>3;u=-1===c?3:0;for(l=0;l<h;l+=2){p=parseInt(a.substr(l,2),16);if(isNaN(p))throw Error("String of HEX type contains invalid characters");m=(l>>>1)+q;for(f=m>>>2;b.length<=f;)b.push(0);b[f]|=p<<8*(u+m%4*c)}return{value:b,binLen:4*h+e}};break;case "TEXT":b=function(b,d,e){var h,l,p=0,f,m,q,u,r,t;d=d||[0];e=e||0;q=e>>>3;if("UTF8"===a)for(t=-1===
+c?3:0,f=0;f<b.length;f+=1)for(h=b.charCodeAt(f),l=[],128>h?l.push(h):2048>h?(l.push(192|h>>>6),l.push(128|h&63)):55296>h||57344<=h?l.push(224|h>>>12,128|h>>>6&63,128|h&63):(f+=1,h=65536+((h&1023)<<10|b.charCodeAt(f)&1023),l.push(240|h>>>18,128|h>>>12&63,128|h>>>6&63,128|h&63)),m=0;m<l.length;m+=1){r=p+q;for(u=r>>>2;d.length<=u;)d.push(0);d[u]|=l[m]<<8*(t+r%4*c);p+=1}else if("UTF16BE"===a||"UTF16LE"===a)for(t=-1===c?2:0,f=0;f<b.length;f+=1){h=b.charCodeAt(f);"UTF16LE"===a&&(m=h&255,h=m<<8|h>>>8);r=
+p+q;for(u=r>>>2;d.length<=u;)d.push(0);d[u]|=h<<8*(t+r%4*c);p+=2}return{value:d,binLen:8*p+e}};break;case "B64":b=function(a,b,e){var h=0,l,p,f,m,q,u,r,t;if(-1===a.search(/^[a-zA-Z0-9=+\/]+$/))throw Error("Invalid character in base-64 string");p=a.indexOf("=");a=a.replace(/\=/g,"");if(-1!==p&&p<a.length)throw Error("Invalid '=' found in base-64 string");b=b||[0];e=e||0;u=e>>>3;t=-1===c?3:0;for(p=0;p<a.length;p+=4){q=a.substr(p,4);for(f=m=0;f<q.length;f+=1)l="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".indexOf(q[f]),
+m|=l<<18-6*f;for(f=0;f<q.length-1;f+=1){r=h+u;for(l=r>>>2;b.length<=l;)b.push(0);b[l]|=(m>>>16-8*f&255)<<8*(t+r%4*c);h+=1}}return{value:b,binLen:8*h+e}};break;case "BYTES":b=function(a,b,e){var h,l,p,f,m,q;b=b||[0];e=e||0;p=e>>>3;q=-1===c?3:0;for(l=0;l<a.length;l+=1)h=a.charCodeAt(l),m=l+p,f=m>>>2,b.length<=f&&b.push(0),b[f]|=h<<8*(q+m%4*c);return{value:b,binLen:8*a.length+e}};break;case "ARRAYBUFFER":try{b=new ArrayBuffer(0)}catch(g){throw Error("ARRAYBUFFER not supported by this environment");}b=
+function(a,b,e){var h,l,p,f,m;b=b||[0];e=e||0;l=e>>>3;m=-1===c?3:0;for(h=0;h<a.byteLength;h+=1)f=h+l,p=f>>>2,b.length<=p&&b.push(0),b[p]|=a[h]<<8*(m+f%4*c);return{value:b,binLen:8*a.byteLength+e}};break;default:throw Error("format must be HEX, TEXT, B64, BYTES, or ARRAYBUFFER");}return b}function y(b,a){return b<<a|b>>>32-a}function S(b,a){return 32<a?(a-=32,new c(b.b<<a|b.a>>>32-a,b.a<<a|b.b>>>32-a)):0!==a?new c(b.a<<a|b.b>>>32-a,b.b<<a|b.a>>>32-a):b}function w(b,a){return b>>>a|b<<32-a}function t(b,
+a){var k=null,k=new c(b.a,b.b);return k=32>=a?new c(k.a>>>a|k.b<<32-a&4294967295,k.b>>>a|k.a<<32-a&4294967295):new c(k.b>>>a-32|k.a<<64-a&4294967295,k.a>>>a-32|k.b<<64-a&4294967295)}function T(b,a){var k=null;return k=32>=a?new c(b.a>>>a,b.b>>>a|b.a<<32-a&4294967295):new c(0,b.a>>>a-32)}function aa(b,a,c){return b&a^~b&c}function ba(b,a,k){return new c(b.a&a.a^~b.a&k.a,b.b&a.b^~b.b&k.b)}function U(b,a,c){return b&a^b&c^a&c}function ca(b,a,k){return new c(b.a&a.a^b.a&k.a^a.a&k.a,b.b&a.b^b.b&k.b^a.b&
+k.b)}function da(b){return w(b,2)^w(b,13)^w(b,22)}function ea(b){var a=t(b,28),k=t(b,34);b=t(b,39);return new c(a.a^k.a^b.a,a.b^k.b^b.b)}function fa(b){return w(b,6)^w(b,11)^w(b,25)}function ga(b){var a=t(b,14),k=t(b,18);b=t(b,41);return new c(a.a^k.a^b.a,a.b^k.b^b.b)}function ha(b){return w(b,7)^w(b,18)^b>>>3}function ia(b){var a=t(b,1),k=t(b,8);b=T(b,7);return new c(a.a^k.a^b.a,a.b^k.b^b.b)}function ja(b){return w(b,17)^w(b,19)^b>>>10}function ka(b){var a=t(b,19),k=t(b,61);b=T(b,6);return new c(a.a^
+k.a^b.a,a.b^k.b^b.b)}function G(b,a){var c=(b&65535)+(a&65535);return((b>>>16)+(a>>>16)+(c>>>16)&65535)<<16|c&65535}function la(b,a,c,g){var d=(b&65535)+(a&65535)+(c&65535)+(g&65535);return((b>>>16)+(a>>>16)+(c>>>16)+(g>>>16)+(d>>>16)&65535)<<16|d&65535}function H(b,a,c,g,d){var e=(b&65535)+(a&65535)+(c&65535)+(g&65535)+(d&65535);return((b>>>16)+(a>>>16)+(c>>>16)+(g>>>16)+(d>>>16)+(e>>>16)&65535)<<16|e&65535}function ma(b,a){var e,g,d;e=(b.b&65535)+(a.b&65535);g=(b.b>>>16)+(a.b>>>16)+(e>>>16);d=(g&
+65535)<<16|e&65535;e=(b.a&65535)+(a.a&65535)+(g>>>16);g=(b.a>>>16)+(a.a>>>16)+(e>>>16);return new c((g&65535)<<16|e&65535,d)}function na(b,a,e,g){var d,n,h;d=(b.b&65535)+(a.b&65535)+(e.b&65535)+(g.b&65535);n=(b.b>>>16)+(a.b>>>16)+(e.b>>>16)+(g.b>>>16)+(d>>>16);h=(n&65535)<<16|d&65535;d=(b.a&65535)+(a.a&65535)+(e.a&65535)+(g.a&65535)+(n>>>16);n=(b.a>>>16)+(a.a>>>16)+(e.a>>>16)+(g.a>>>16)+(d>>>16);return new c((n&65535)<<16|d&65535,h)}function oa(b,a,e,g,d){var n,h,l;n=(b.b&65535)+(a.b&65535)+(e.b&
+65535)+(g.b&65535)+(d.b&65535);h=(b.b>>>16)+(a.b>>>16)+(e.b>>>16)+(g.b>>>16)+(d.b>>>16)+(n>>>16);l=(h&65535)<<16|n&65535;n=(b.a&65535)+(a.a&65535)+(e.a&65535)+(g.a&65535)+(d.a&65535)+(h>>>16);h=(b.a>>>16)+(a.a>>>16)+(e.a>>>16)+(g.a>>>16)+(d.a>>>16)+(n>>>16);return new c((h&65535)<<16|n&65535,l)}function z(b){var a=0,e=0,g;for(g=0;g<arguments.length;g+=1)a^=arguments[g].b,e^=arguments[g].a;return new c(e,a)}function B(b){var a=[],e;if("SHA-1"===b)a=[1732584193,4023233417,2562383102,271733878,3285377520];
+else if(0===b.lastIndexOf("SHA-",0))switch(a=[3238371032,914150663,812702999,4144912697,4290775857,1750603025,1694076839,3204075428],e=[1779033703,3144134277,1013904242,2773480762,1359893119,2600822924,528734635,1541459225],b){case "SHA-224":break;case "SHA-256":a=e;break;case "SHA-384":a=[new c(3418070365,a[0]),new c(1654270250,a[1]),new c(2438529370,a[2]),new c(355462360,a[3]),new c(1731405415,a[4]),new c(41048885895,a[5]),new c(3675008525,a[6]),new c(1203062813,a[7])];break;case "SHA-512":a=[new c(e[0],
+4089235720),new c(e[1],2227873595),new c(e[2],4271175723),new c(e[3],1595750129),new c(e[4],2917565137),new c(e[5],725511199),new c(e[6],4215389547),new c(e[7],327033209)];break;default:throw Error("Unknown SHA variant");}else if(0===b.lastIndexOf("SHA3-",0)||0===b.lastIndexOf("SHAKE",0))for(b=0;5>b;b+=1)a[b]=[new c(0,0),new c(0,0),new c(0,0),new c(0,0),new c(0,0)];else throw Error("No SHA variants supported");return a}function K(b,a){var c=[],e,d,n,h,l,p,f;e=a[0];d=a[1];n=a[2];h=a[3];l=a[4];for(f=
+0;80>f;f+=1)c[f]=16>f?b[f]:y(c[f-3]^c[f-8]^c[f-14]^c[f-16],1),p=20>f?H(y(e,5),d&n^~d&h,l,1518500249,c[f]):40>f?H(y(e,5),d^n^h,l,1859775393,c[f]):60>f?H(y(e,5),U(d,n,h),l,2400959708,c[f]):H(y(e,5),d^n^h,l,3395469782,c[f]),l=h,h=n,n=y(d,30),d=e,e=p;a[0]=G(e,a[0]);a[1]=G(d,a[1]);a[2]=G(n,a[2]);a[3]=G(h,a[3]);a[4]=G(l,a[4]);return a}function Z(b,a,c,e){var d;for(d=(a+65>>>9<<4)+15;b.length<=d;)b.push(0);b[a>>>5]|=128<<24-a%32;a+=c;b[d]=a&4294967295;b[d-1]=a/4294967296|0;a=b.length;for(d=0;d<a;d+=16)e=
+K(b.slice(d,d+16),e);return e}function L(b,a,k){var g,d,n,h,l,p,f,m,q,u,r,t,v,w,y,z,A,x,F,B,C,D,E=[],J;if("SHA-224"===k||"SHA-256"===k)u=64,t=1,D=Number,v=G,w=la,y=H,z=ha,A=ja,x=da,F=fa,C=U,B=aa,J=e;else if("SHA-384"===k||"SHA-512"===k)u=80,t=2,D=c,v=ma,w=na,y=oa,z=ia,A=ka,x=ea,F=ga,C=ca,B=ba,J=V;else throw Error("Unexpected error in SHA-2 implementation");k=a[0];g=a[1];d=a[2];n=a[3];h=a[4];l=a[5];p=a[6];f=a[7];for(r=0;r<u;r+=1)16>r?(q=r*t,m=b.length<=q?0:b[q],q=b.length<=q+1?0:b[q+1],E[r]=new D(m,
+q)):E[r]=w(A(E[r-2]),E[r-7],z(E[r-15]),E[r-16]),m=y(f,F(h),B(h,l,p),J[r],E[r]),q=v(x(k),C(k,g,d)),f=p,p=l,l=h,h=v(n,m),n=d,d=g,g=k,k=v(m,q);a[0]=v(k,a[0]);a[1]=v(g,a[1]);a[2]=v(d,a[2]);a[3]=v(n,a[3]);a[4]=v(h,a[4]);a[5]=v(l,a[5]);a[6]=v(p,a[6]);a[7]=v(f,a[7]);return a}function D(b,a){var e,g,d,n,h=[],l=[];if(null!==b)for(g=0;g<b.length;g+=2)a[(g>>>1)%5][(g>>>1)/5|0]=z(a[(g>>>1)%5][(g>>>1)/5|0],new c(b[g+1],b[g]));for(e=0;24>e;e+=1){n=B("SHA3-");for(g=0;5>g;g+=1)h[g]=z(a[g][0],a[g][1],a[g][2],a[g][3],
+a[g][4]);for(g=0;5>g;g+=1)l[g]=z(h[(g+4)%5],S(h[(g+1)%5],1));for(g=0;5>g;g+=1)for(d=0;5>d;d+=1)a[g][d]=z(a[g][d],l[g]);for(g=0;5>g;g+=1)for(d=0;5>d;d+=1)n[d][(2*g+3*d)%5]=S(a[g][d],W[g][d]);for(g=0;5>g;g+=1)for(d=0;5>d;d+=1)a[g][d]=z(n[g][d],new c(~n[(g+1)%5][d].a&n[(g+2)%5][d].a,~n[(g+1)%5][d].b&n[(g+2)%5][d].b));a[0][0]=z(a[0][0],X[e])}return a}var e,V,W,X;e=[1116352408,1899447441,3049323471,3921009573,961987163,1508970993,2453635748,2870763221,3624381080,310598401,607225278,1426881987,1925078388,
+2162078206,2614888103,3248222580,3835390401,4022224774,264347078,604807628,770255983,1249150122,1555081692,1996064986,2554220882,2821834349,2952996808,3210313671,3336571891,3584528711,113926993,338241895,666307205,773529912,1294757372,1396182291,1695183700,1986661051,2177026350,2456956037,2730485921,2820302411,3259730800,3345764771,3516065817,3600352804,4094571909,275423344,430227734,506948616,659060556,883997877,958139571,1322822218,1537002063,1747873779,1955562222,2024104815,2227730452,2361852424,
+2428436474,2756734187,3204031479,3329325298];V=[new c(e[0],3609767458),new c(e[1],602891725),new c(e[2],3964484399),new c(e[3],2173295548),new c(e[4],4081628472),new c(e[5],3053834265),new c(e[6],2937671579),new c(e[7],3664609560),new c(e[8],2734883394),new c(e[9],1164996542),new c(e[10],1323610764),new c(e[11],3590304994),new c(e[12],4068182383),new c(e[13],991336113),new c(e[14],633803317),new c(e[15],3479774868),new c(e[16],2666613458),new c(e[17],944711139),new c(e[18],2341262773),new c(e[19],
+2007800933),new c(e[20],1495990901),new c(e[21],1856431235),new c(e[22],3175218132),new c(e[23],2198950837),new c(e[24],3999719339),new c(e[25],766784016),new c(e[26],2566594879),new c(e[27],3203337956),new c(e[28],1034457026),new c(e[29],2466948901),new c(e[30],3758326383),new c(e[31],168717936),new c(e[32],1188179964),new c(e[33],1546045734),new c(e[34],1522805485),new c(e[35],2643833823),new c(e[36],2343527390),new c(e[37],1014477480),new c(e[38],1206759142),new c(e[39],344077627),new c(e[40],
+1290863460),new c(e[41],3158454273),new c(e[42],3505952657),new c(e[43],106217008),new c(e[44],3606008344),new c(e[45],1432725776),new c(e[46],1467031594),new c(e[47],851169720),new c(e[48],3100823752),new c(e[49],1363258195),new c(e[50],3750685593),new c(e[51],3785050280),new c(e[52],3318307427),new c(e[53],3812723403),new c(e[54],2003034995),new c(e[55],3602036899),new c(e[56],1575990012),new c(e[57],1125592928),new c(e[58],2716904306),new c(e[59],442776044),new c(e[60],593698344),new c(e[61],3733110249),
+new c(e[62],2999351573),new c(e[63],3815920427),new c(3391569614,3928383900),new c(3515267271,566280711),new c(3940187606,3454069534),new c(4118630271,4000239992),new c(116418474,1914138554),new c(174292421,2731055270),new c(289380356,3203993006),new c(460393269,320620315),new c(685471733,587496836),new c(852142971,1086792851),new c(1017036298,365543100),new c(1126000580,2618297676),new c(1288033470,3409855158),new c(1501505948,4234509866),new c(1607167915,987167468),new c(1816402316,1246189591)];
+X=[new c(0,1),new c(0,32898),new c(2147483648,32906),new c(2147483648,2147516416),new c(0,32907),new c(0,2147483649),new c(2147483648,2147516545),new c(2147483648,32777),new c(0,138),new c(0,136),new c(0,2147516425),new c(0,2147483658),new c(0,2147516555),new c(2147483648,139),new c(2147483648,32905),new c(2147483648,32771),new c(2147483648,32770),new c(2147483648,128),new c(0,32778),new c(2147483648,2147483658),new c(2147483648,2147516545),new c(2147483648,32896),new c(0,2147483649),new c(2147483648,
+2147516424)];W=[[0,36,3,41,18],[1,44,10,45,2],[62,6,43,15,61],[28,55,25,21,56],[27,20,39,8,14]];"function"===typeof define&&define.amd?define(function(){return C}):"undefined"!==typeof exports?("undefined"!==typeof module&&module.exports&&(module.exports=C),exports=C):Y.jsSHA=C})(this);
+//-------------------------------------------------------------------//
+///////////////////////////////////////////////////////////////////////
+/* ------------------------------------------------------------------//
+/ COPYRIGHT (c) 2014 CenturyLink, Inc.
+/ SEE LICENSE-MIT FOR LICENSE TERMS
+/
+/ Program: "PlasticBase64Polyfill.js" => Plastic Data Modeling Kit [pdmk]
+/                                        Base64 Polyfill Functions
+/ Author: John R B Woodworth <John.Woodworth@CenturyLink.com>
+/
+/ Support Contact: plastic@centurylink.com
+/
+/ Created: 10 February, 2017
+/ Last Updated: 10 February, 2017
+/
+/ VERSION: 1.0.0b
+/
+/ NOTES:
+/
+/ CHANGES:
+/
+//-------------------------------------------------------------------*/
+///////////////////////////////////////////////////////////////////////
+//-------------------------------------------------------------------//
+/*                               ___  
+            _______             /  /\                        ___
+           /  ___  \        ___/  /  \__                    /  /\_________
+          /  /\  )  )__    /  /  /   /__\                  /  /  \        \
+         /  /  \/  / \_\__/__/  /   /  /\\_  ____         /  /  _/__      /\
+        /  /___/  /  /  ____   /   /  ___  \/    \       /  / _/  _/\    /  \
+       /  _______/  /  /\  /  /   /  /\  \___/)  /\___  /  /_/  _/\\ \  /    \
+      /  /\      \ /  /  \/  /   /  /  \__\__/  /  \  \/      _/\\ \\/ /      \
+     /  /  \______/   (__/  /   /  /   /    /  /   / //  _   /\\ \\/  /       /
+    /  /   /      (________/   /__/   /    /__/   / //  / \  \ \\/   /       /
+   /__/   /       /\       \  /\  \  /     \  \  / //__/   \__\/    /       /
+   \  \  /       / /\_______\/ /\__\/       \__\/ /  \ \  / \  \   /       /
+  / \__\/       / /           /__________________/  / \_\/   \__\ /       /
+ /             / \___________/ \=                \ /____________ /       /
+ \____________/   \=         \  \==               \ \=           \      /
+  \=          \    \==        \  \===              \ \==          \    /
+   \==         \    \===       \  \====_____________\/\===         \  /
+    \===        \  / \====______\/                     \====________\/
+     \====_______\/
+*/
+//-------------------------------------------------------------------//
+//
+// This was thrown together quickly to support IE9 and older.
+// Maybe not the fastest implementation but novel enough to not 
+// worry about MIT license incompatibilities };{>  /JW
+//
+(function(_){
+  var InvalidCharacterError = function(msg) {
+    this.message = msg;
+  };
+  InvalidCharacterError.prototype = new Error;
+  InvalidCharacterError.prototype.name = 'InvalidCharacterError';
+  _.btoa = _.btoa || function(inStr){
+    var retVal = '', buf;
+    if (/[^\x00-\xFF]/.test(inStr)) { // Test for valid input
+      throw new InvalidCharacterError('String contains an invalid character');
+    } else {
+      for (var cntPos = 0; cntPos < inStr.length; cntPos += 3) {
+        buf = [0];
+        for (var cntChar = 0; cntChar < 3; cntChar ++) {
+          var thisCode = ((cntPos+cntChar) < inStr.length) //->
+              ? inStr.charCodeAt(cntPos+cntChar) : null;
+          buf[cntChar]  |= thisCode >> ((cntChar)*2)
+          buf[cntChar]   = buf[cntChar] >> 2
+          if (thisCode !== null) {
+            buf[cntChar+1] = (thisCode << (8-((cntChar+1)*2)) & 0xFF)
+            if (cntChar === 2) { buf[cntChar+1] = buf[cntChar+1] >> 2; };
+          } else {
+            buf[2] = (inStr.length-cntPos === 1) ? null : buf[2];
+            buf[3] = null;
+            break;
+          }
+        }
+        for (var cntBuf = 0; cntBuf < 4; cntBuf ++) {
+          buf[cntBuf] = (buf[cntBuf] === null) //->
+            ? 0x3D //->
+            : (buf[cntBuf] < 26) //->
+              ? buf[cntBuf] + 65 //->
+              : (buf[cntBuf] < 52) //->
+                ? buf[cntBuf] + 71 //->
+                : (buf[cntBuf] < 62) //->
+                  ? buf[cntBuf] - 4 //->
+                  : (buf[cntBuf] === 62) ? 43 : 47;
+          retVal += String.fromCharCode(buf[cntBuf]);
+        }
+      }
+    }
+    return retVal;
+  };
+  _.atob = _.atob || function(inStr){
+    var retVal = '', buf;
+    if (/[^A-Za-z0-9+\/=]/.test(inStr)) { // Test for valid input
+      throw new InvalidCharacterError('String contains an invalid character');
+    } else {
+      while (inStr.length % 4) { inStr += '='; };
+      for (var cntPos = 0; cntPos < inStr.length; cntPos += 4) {
+        buf = [0];
+        for (var cntChar = 0; cntChar < 4; cntChar ++) {
+          var thisCode = inStr.charCodeAt(cntPos+cntChar);
+          thisCode = ((thisCode & 0x5F) === thisCode) //->
+            ? thisCode - 65 //->
+            : (thisCode === 0x3D) //->
+              ? null //->
+              : (thisCode === 0x2B) //->
+                ? 62 //->
+                : (thisCode === 0x2F) //->
+                  ? 63 //->
+                  : ((thisCode & 0x3F) === thisCode) //->
+                    ? thisCode + 4 //->
+                    : ((thisCode & 0x7F) === thisCode) //->
+                      ? thisCode - 71 : null;
+          thisCode = (thisCode === null) ? null : thisCode << ((cntChar+1)*2);
+          if ((cntChar) && (buf[cntChar-1] !== null)) { buf[cntChar-1] |= ((thisCode & 0xFF00) >> 8); };
+          buf[cntChar] = (thisCode === null) ? null : (thisCode & 0xFF);
+        }
+        retVal += String.fromCharCode(buf[0]);
+        retVal += (buf[2] === null) ? '' : String.fromCharCode(buf[1]);
+        retVal += (buf[3] === null) ? '' : String.fromCharCode(buf[2]);
+      }
+    }
+    return retVal;
+  };
+})(window);
